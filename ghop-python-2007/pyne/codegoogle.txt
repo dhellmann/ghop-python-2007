@@ -1,0 +1,156 @@
+OK, I'm sorry I didn't get farther (I was going to work yesterday but the power
+went out :-( ).  Here's what the program can do so far:
+- stores From, To, Subject, Date, CC, BCC, and message body in sqlite database.
+- takes the text/plain message only if it's a multipart message (for the HTML
+  requirement above)
+- Prints out the list of emails in a pretty format
+- Fairly advanced search syntax allows user to limit searches to a particular
+  field or do a full-text search (searches all headers + message)
+- When searching by date, natural language input is allowed
+- When searching by date, ranges are allowed (e.g., 4th of july to december
+  16th, 2006)
+- Accepts most all messages without choking
+- UI resizes to fit the screen (must re-run program)
+- Dates reformat as their column gets smaller
+- Detection of "name <email>" form, does the right thing depending on column
+  width (i.e., displays email when there is no name, name when there is not
+  enough space for name and email, and name and email when there is enough
+  room).
+
+4 different modes:
+- "./pyne.py insert" adds an email to the database.  Can pipe to stdin or put
+  a filename at the end.  Can take multiple filenames, a combination of
+  filenames and stdin, just stdin, or just 1 filename.
+- "./pyne.py list" prints all of the email headers in the database in a nice
+  6-column view.
+- "./pyne.py search query" where query is your query will search the database.
+  "%" is a multicharacter wild card and "_" is a single character wild card.
+  Query can be a combination of "tokens" which take 2 forms:
+   - "x:y" where x is the header to search (from, to, etc.; case-insensitive)
+     and y is the search term.  Put quotes (single or double) around y to have
+     a multiword search term.  Multiple x:y sets will be ANDed together.
+       - "date:y" where will search for emails sent on a certain date.  Natural
+         language processing is used, so y can be just about any date-like
+         verbiage.
+       - "date:'y to z' will use the same natural language processing to search
+         for all emails sent between y and z.
+   - "x" will search for "x" anywhere in the email, including the body and all
+     stored headers.
+- "./pyne.py display query" works as "./pyne.py search query" but it displays
+  the body of the emails.
+
+Could be improved:
+- Input multiple emails from one file.
+- Changing column width based on content.  For example, if there were no CC-
+  fields in a certain result set, don't display that column.
+- Being able to use NOT and OR in queries.
+
+I Stole Stuff From:
+- http://mail.python.org/pipermail/python-list/2000-May/033365.html for the
+  code that determines the console width.
+- http://labix.org/python-dateutil (mainly) for the natural language date
+  processing.
+
+Uploaded Files:
+- pyne.py is the stuff I wrote.
+- There pyne.tar.bz2 with pyne.py and the date processing library.
+
+Examples:
+(Data is generated randomly, I don't know why some From fields are missing.  It
+ doesn't happen with my actual emails.  I tested extensively with my personal
+ emails so these examples don't show off encoding detection or anything too
+ special.)
+
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py list | head
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ Susan U. A | Maria B. W | Every stop | Nov 13, 04 | Duis aute  | He just ke 
+ Laura S. A | Maria L. M | Ulysses, f | Nov 28, 06 | Down the r | Ut enim ad 
+            | Kevin M. A | I might ju | Nov 27, 06 | Every day  | There's a  
+ Helen E. J | Jason V. W | Excepteur  | Nov 17, 03 | Always fig | There's a  
+            | Jennifer W | He's got s | Nov 25, 02 | I might ju | There's a  
+ Charles X. | Barbara I. | Duis aute  | Nov 17, 01 | Ulysses, f | Every day  
+ Steven U.  | Sarah H. M | Ulysses, f | Nov 13, 02 | No-one els | Ut enim ad 
+ George R.  | Brian U. L | Ulysses, f | Nov 22, 00 | Soaring th | Ulysses, f 
+            | Kimberly N | I've gotte | Nov 12, 03 | Who says y |     
+
+Resized terminal, all columns shrunk and date switched to mm/dd/yy.
+There are other date options on the larger side as well.
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py list | head
+   From   |    To    | Subject  |   Date   |    Cc    |   Bcc    
+ Susan U. | Maria B. | Every st | 11/13/04 | Duis aut | He just  
+ Laura S. | Maria L. | Ulysses, | 11/28/06 | Down the | Ut enim  
+          | Kevin M. | I might  | 11/27/06 | Every da | There's  
+ Helen E. | Jason V. | Excepteu | 11/17/03 | Always f | There's  
+          | Jennifer | He's got | 11/25/02 | I might  | There's  
+ Charles  | Barbara  | Duis aut | 11/17/01 | Ulysses, | Every da 
+ Steven U | Sarah H. | Ulysses, | 11/13/02 | No-one e | Ut enim  
+ George R | Brian U. | Ulysses, | 11/22/00 | Soaring  | Ulysses, 
+          | Kimberly | I've got | 11/12/03 | Who says |          
+
+Search for "charles" in anywhere in the email:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search charles
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ Charles X. | Barbara I. | Duis aute  | Nov 17, 01 | Ulysses, f | Every day  
+ William V. | Charles H. | He's going | Nov 10, 06 | He's got s | Who says y 
+ Charles X. | Anthony Y. | Off to New | Nov 18, 05 | There's a  | There's a  
+ Robert S.  | Charles Z. | Rolling  d | Nov 23, 06 | Down the r | Duis aute  
+            | Michael C. | He's going | Nov 17, 00 |            |            
+ Jennifer X | Charles G. | I've gotte | Nov 28, 00 | I might ju | Hey there  
+            | Jennifer P | Down the r | Nov 28, 01 |            |            
+ Charles T. | Sarah R. D | I might ju | Nov 23, 05 | Hey there  | He's going 
+ Charles R. | James S. G | Always fig | Nov 21, 03 | He's got s | Duis aute  
+
+Search for "charles" in the From field only:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search from:charles
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ Charles X. | Barbara I. | Duis aute  | Nov 17, 01 | Ulysses, f | Every day  
+ Charles X. | Anthony Y. | Off to New | Nov 18, 05 | There's a  | There's a  
+ Charles T. | Sarah R. D | I might ju | Nov 23, 05 | Hey there  | He's going 
+ Charles R. | James S. G | Always fig | Nov 21, 03 | He's got s | Duis aute  
+
+Search for emails from Charles to James:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search 'from:charles to:james'
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ Charles R. | James S. G | Always fig | Nov 21, 03 | He's got s | Duis aute  
+
+Let's look at the body of that email (they all have Dan Finnie in the body):
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py display 'from:charles to:james'
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ Charles R. | James S. G | Always fig | Nov 21, 03 | He's got s | Duis aute  
+Dan Finnie Dan Finnie Dan Finnie...
+
+Because they all have Dan Finnie in the body, a search for "Dan Finnie" should
+get the same results as the "list" command:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py list | wc
+    101    1800    7878
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search "Dan Finnie" | wc
+    101    1800    7878
+
+Now let's look at some date processing:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search "date:'nov 12 2002'"
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ George C.  | Brian K. C | I've gotte | Nov 12, 02 | Soaring th | Who says y 
+
+Is the same as:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search "date:'11/12/02'"
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+ George C.  | Brian K. C | I've gotte | Nov 12, 02 | Soaring th | Who says y 
+
+Let's look at who sent mail in November 2002:
+daniel@daniel-desktop:~/ghop/email_database$ ./pyne.py search "date:'11/1/02 to 11/30/02'"
+    From    |     To     |  Subject   |    Date    |     Cc     |    Bcc     
+            | Jennifer W | He's got s | Nov 25, 02 | I might ju | There's a  
+ Steven U.  | Sarah H. M | Ulysses, f | Nov 13, 02 | No-one els | Ut enim ad 
+ George C.  | Brian K. C | I've gotte | Nov 12, 02 | Soaring th | Who says y 
+ Nancy F. W | Deborah Q. | I've gotte | Nov 17, 02 | There's a  | I might ju 
+            | Laura I. D | Soaring th | Nov 27, 02 | Hey there  | Down the r 
+            | Barbara L. | Ut enim ad | Nov 10, 02 | Hong Kong  | Always fig 
+ Ronald Y.  | Christophe | He's going | Nov 24, 02 | Ulysses, f | He's got s 
+ Helen D. H | Donna I. J | Every stop | Nov 12, 02 | I might ju | No-one els 
+ Thomas J.  | Sarah S. M | He's going | Nov 16, 02 | Rolling  d | No-one els 
+ Joseph T.  | Nancy D. M | I've gotte | Nov 13, 02 | He's got s | Maybe tomo 
+ Brian A. M | Sandra Y.  | Ulysses, f | Nov 22, 02 | Who says y | No-one els 
+ Thomas A.  | Brian Y. H | Every stop | Nov 24, 02 | He just ke | Duis aute  
+
+
+

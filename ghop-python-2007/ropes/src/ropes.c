@@ -28,11 +28,6 @@ static void _rope_inc_refcount(PyRopeObject* rn)
   Py_INCREF(rn);
 }
 
-static void _rope_dec_refcount(PyRopeObject* rn)
-{
-  Py_DECREF(rn);
-}
-
 void rope_traverse(PyRopeObject* node, rope_traverse_func func)
 {
   if(!node)
@@ -44,17 +39,12 @@ void rope_traverse(PyRopeObject* node, rope_traverse_func func)
   func(node);
 }
 
-void rope_destroy(PyRopeObject* r)
-{
-  rope_traverse(r, _rope_dec_refcount);
-}
-
 void rope_incref(PyRopeObject*  r)
 {
   rope_traverse(r, _rope_inc_refcount);
 }
 
-void rope_copy(PyRopeObject* dest, PyRopeObject* src)
+void rope_move(PyRopeObject* dest, PyRopeObject* src)
 { 
   dest->n_type=src->n_type;
   dest->n_length=src->n_length;
@@ -81,7 +71,7 @@ void rope_copy(PyRopeObject* dest, PyRopeObject* src)
 	dest->n_node.slice.end=src->n_node.slice.end;
 	break;
   case ROPE_LITERAL_NODE:
-	memcpy(dest->n_node.literal.l_literal,src->n_node.literal.l_literal, LITERAL_LENGTH);
+	dest->n_node.literal.l_literal=src->n_node.literal.l_literal;
 	break;
   }
 }
@@ -93,12 +83,12 @@ int rope_append(PyRopeObject* r, PyRopeObject* to_append)
   if(!cur || !to_append || to_append->n_type==ROPE_UNINITIALIZED_NODE)
 	return 0;
   if(r->n_type==ROPE_UNINITIALIZED_NODE) {
-	rope_copy(r, to_append);
+	rope_move(r, to_append);
 	return 0;
   }
   if(r->n_type!=ROPE_CONCAT_NODE) {
 	PyRopeObject* new=(PyRopeObject*) python_rope_new();
-	rope_copy(new, r);
+	rope_move(new, r);
 	r->n_type=ROPE_CONCAT_NODE;
 	r->n_node.concat.left=new;
 	rope_incref(to_append);
@@ -128,47 +118,69 @@ int rope_append(PyRopeObject* r, PyRopeObject* to_append)
   }
   /* cur needs to become a concatenation node */
   else {
-	PyRopeObject* new=(PyRopeObject*) python_rope_new();
-	rope_copy(new, cur);
-	cur->n_type=ROPE_CONCAT_NODE;
-	cur->n_node.concat.left=new;
-	rope_incref(to_append);
-	cur->n_node.concat.right=to_append;
-	cur->n_length=cur->n_node.concat.left->n_length+cur->n_node.concat.right->n_length;
+	if(cur->ob_refcnt==1)
+	  {
+		PyRopeObject* new=(PyRopeObject*) python_rope_new();
+		rope_move(new, cur);
+		cur->n_type=ROPE_CONCAT_NODE;
+		cur->n_node.concat.left=new;
+		rope_incref(to_append);
+		cur->n_node.concat.right=to_append;
+		cur->n_length=cur->n_node.concat.left->n_length+cur->n_node.concat.right->n_length;
+	  }
+	else /* Create new nodes */
+	  {
+		cur_parent->n_node.concat.right=python_rope_new();
+		cur_parent->n_node.concat.right->n_type=ROPE_CONCAT_NODE;
+		cur_parent->n_node.concat.right->n_node.concat.left=cur;
+		rope_incref(to_append);
+		cur_parent->n_node.concat.right->n_node.concat.right=to_append;
+		cur_parent->n_node.concat.right->n_length=cur_parent->n_node.concat.right->n_node.concat.left->n_length+cur_parent->n_node.concat.right->n_node.concat.right->n_length;
+	  }
 	return 0;
   }
   return 0;
 }
 
-/* XXX: slice support */
-void rope_to_string(PyRopeObject* node, char* v, unsigned int w, unsigned int offset, unsigned int length)
+void rope_to_string(PyRopeObject* node, char* v, unsigned int w, int offset, int length)
 {
   if(!node || node->n_length==0)
 	return;
+  if(offset>node->n_length)
+	return;
+  if(offset<0) offset=0;
+  if(length<0) length=0;
+  int whole_length=length;
   switch(node->n_type) {
+  case ROPE_SLICE_NODE:
+	offset=node->n_node.slice.start;
+	length=node->n_length;
+	node=node->n_node.slice.left;
   case ROPE_CONCAT_NODE:
-	rope_to_string(node->n_node.concat.left, v, w,0,-1);
-	if(node->n_node.concat.left)
-	  w+=node->n_node.concat.left->n_length;
-	rope_to_string(node->n_node.concat.right, v, w,0, -1);
+	if(offset<=node->n_node.concat.left->n_length)
+	  {
+		rope_to_string(node->n_node.concat.left, v, w, offset, length);
+		length-=(node->n_node.concat.left->n_length-offset);
+		w+=(node->n_node.concat.left->n_length-offset);
+	  }
+	offset-=(node->n_node.concat.left->n_length);
+	rope_to_string(node->n_node.concat.right, v, w, offset, length);
 	break;
+	/* XXX: slice support */
   case ROPE_MULTIPLY_NODE:
 	{
 	  int i=0;
 	  for(;i<node->n_node.multiply.m_times;i++) {
 		if(node->n_node.multiply.left) {
-		  rope_to_string(node->n_node.multiply.left, v, w,0,-1);
+		  rope_to_string(node->n_node.multiply.left, v, w,0,node->n_node.multiply.left->n_length);
 		  w+=node->n_node.multiply.left->n_length;
 		}
 		if(node->n_node.multiply.right) {
-		  rope_to_string(node->n_node.multiply.right, v, w,0,-1);
+		  rope_to_string(node->n_node.multiply.right, v, w,0,node->n_node.multiply.right->n_length);
 		  w+=node->n_node.multiply.right->n_length;
 		}
 	  }
 	}
-	break;
-  case ROPE_SLICE_NODE:
-	  
 	break;
   case ROPE_LITERAL_NODE:
 	memcpy(v+w, node->n_node.literal.l_literal+offset, ((node->n_length<length)?node->n_length:length));
@@ -219,7 +231,6 @@ char rope_index(PyRopeObject* r, int i)
 		else {
 		  index=index-rope->n_node.multiply.left->n_length;
 		  rope=rope->n_node.multiply.right;
-		  printf("multiply right!\n");
 		  goto head;
 		}
 	  }
@@ -274,7 +285,7 @@ int rope_get_balance_list_count(PyRopeObject* node)
 	retval=1;
   return retval;
 }
-int spaces=0;
+
 void _rope_balance(PyRopeObject** parent, PyRopeObject** node_list, int node_list_size)
 {
   /* If there is only one node just set it */
@@ -321,6 +332,8 @@ int _rope_get_balance_list(PyRopeObject** node_list,  PyRopeObject* node)
   return 0;
 }
 
+/* This function increments the reference counts of all nodes that are not concatenation nodes. When we delete the concatenation nodes later
+   None of the literal or other node types will be deleted because their reference counts are > 1 */
 void _rope_balance_del(PyRopeObject* node)
 {
   if(!node)
@@ -328,7 +341,9 @@ void _rope_balance_del(PyRopeObject* node)
   if(node->n_type==ROPE_CONCAT_NODE) {
 	_rope_balance_del(node->n_node.concat.left);
 	_rope_balance_del(node->n_node.concat.right);
-	Py_DECREF(node);
+  }
+  else {
+	Py_INCREF(node);
   }
   return;
 }
@@ -337,7 +352,6 @@ void rope_balance(PyRopeObject* r)
 {
   if(!r || r->n_type!=ROPE_CONCAT_NODE)
 	return;
-  spaces=0;
   int blc=rope_get_balance_list_count(r);
   PyRopeObject* old_root=r;
   PyRopeObject** node_list=malloc(sizeof(struct rope_node*) * blc);
@@ -345,6 +359,9 @@ void rope_balance(PyRopeObject* r)
   /* Delete the concatenation nodes */
   _rope_balance_del(r->n_node.concat.left);
   _rope_balance_del(r->n_node.concat.right);
+  Py_XDECREF(r->n_node.concat.left);
+  Py_XDECREF(r->n_node.concat.right);
+  r->n_node.concat.left=r->n_node.concat.right=NULL;
   /*   for(;i<blc;i++) */
   /* 	{ */
   /* 	  if(node_list[i]->n_type!=ROPE_LITERAL_NODE) */

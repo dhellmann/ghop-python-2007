@@ -58,7 +58,7 @@ typedef struct _PyRopeObject
 
 	struct rope_literal_node
 	{
-	  char l_literal[LITERAL_LENGTH];
+	  char* l_literal;
 	} literal;
   } n_node;
 } PyRopeObject;
@@ -68,7 +68,7 @@ typedef void(*rope_traverse_func)(PyRopeObject*);
 PyObject* python_rope_new();
 void rope_destroy(PyRopeObject* r);
 int rope_append(PyRopeObject* r, PyRopeObject* node);
-void rope_to_string(PyRopeObject* node, char* v, unsigned int w, unsigned int offset, unsigned int length);
+void rope_to_string(PyRopeObject* node, char* v, unsigned int w, int offset, int length);
 void print_rope(PyRopeObject* node);
 void rope_balance(PyRopeObject* node);
 void rope_incref(PyRopeObject* node);

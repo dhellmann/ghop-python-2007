@@ -44,11 +44,13 @@ static PyRopeObject* PyObject_to_rope_node(PyObject* obj)
 	PyRopeObject* ln=(PyRopeObject*)python_rope_new();
 	ln->n_type=ROPE_LITERAL_NODE;
 	ln->n_length=strlen(PyString_AsString(obj));
+	ln->n_node.literal.l_literal=malloc(PyString_Size(obj));
 	memcpy(ln->n_node.literal.l_literal, PyString_AsString(obj), ln->n_length);
 	return ln;
   }
   else if(PyString_Check(obj)) {
 	PyRopeObject* retval=(PyRopeObject*)python_rope_new();
+	retval->n_type=ROPE_UNINITIALIZED_NODE;
 	char* c=PyString_AsString(obj);
 	int size=strlen(c);
 	int i=0;
@@ -60,8 +62,10 @@ static PyRopeObject* PyObject_to_rope_node(PyObject* obj)
 	  ln=(PyRopeObject*) python_rope_new();
 	  ln->n_type=ROPE_LITERAL_NODE;
 	  ln->n_length=cur_size;
+	  ln->n_node.literal.l_literal=malloc(cur_size);
 	  memcpy(ln->n_node.literal.l_literal,c,cur_size);
 	  rope_append(retval, ln);
+	  Py_DECREF(ln);
 	  c+=LITERAL_LENGTH;
 	}
 	rope_balance(retval);
@@ -73,9 +77,11 @@ static PyRopeObject* PyObject_to_rope_node(PyObject* obj)
 static void
 ropeobj_dealloc(PyRopeObject* r)
 {
-  if(r->n_type==ROPE_CONCAT_NODE || r->n_type==ROPE_MULTIPLY_NODE) {
+  if(r->n_type!=ROPE_LITERAL_NODE) {
 	Py_XDECREF(r->n_node.concat.left); /* If it goes to 0, this function will recurse */
 	Py_XDECREF(r->n_node.concat.right);
+  } else {
+	free(r->n_node.literal.l_literal);
   }
   PyObject_Del((PyObject*)r);
 }
@@ -115,9 +121,15 @@ ropeobj_concat(PyRopeObject* self, PyObject* to_append)
 }
 
 static int
-ropeobj_initobj(PyObject* self, PyObject* args, PyObject* kwds)
+ropeobj_initobj(PyRopeObject* self, PyObject* args, PyObject* kwds)
 {
-  ropeobj_append((PyRopeObject*) self, args, kwds);
+  if(self->n_type!=ROPE_LITERAL_NODE)
+	{
+	  Py_XDECREF(self->n_node.concat.left);
+	  Py_XDECREF(self->n_node.concat.right);
+	}
+  self->n_type=ROPE_UNINITIALIZED_NODE;
+  ropeobj_append(self, args, kwds);
   return 0;
 }
 
@@ -138,7 +150,7 @@ ropeobj_repr(PyRopeObject* r)
   PyObject* retval;
   char* v=malloc(r->n_length+strlen("Rope('')"));
   memcpy(v, "Rope('", strlen("Rope('"));
-  rope_to_string(r, v, strlen("Rope('"),0,r->n_length);
+  rope_to_string(r, v+strlen("Rope('"), 0,0,r->n_length);
   memcpy(v+strlen("Rope('")+r->n_length, "')",2);
   retval=PyString_FromStringAndSize(v,r->n_length+strlen("Rope('')"));
   free(v);
@@ -202,7 +214,7 @@ ropeobj_repeat(PyRopeObject* self, int times)
 	return NULL;
   }
   PyRopeObject* old_root=(PyRopeObject*)python_rope_new();
-  rope_copy(old_root, self);
+  rope_move(old_root, self);
   /* TODO: split old root into balanced halves */
   self->n_type=ROPE_MULTIPLY_NODE;
   self->n_length=old_root->n_length*times;
@@ -217,7 +229,6 @@ ropeobj_repeat(PyRopeObject* self, int times)
 static int
 ropeobj_length(PyRopeObject* r)
 {
-  printf("%ld\n",rope_hash(r));
   return r->n_length;
 }
 
@@ -279,6 +290,26 @@ ropeobj_item(PyRopeObject* self, int i)
   return PyString_FromStringAndSize(&c, 1);
 }
 
+static PyObject*
+ropeobj_slice(PyRopeObject* self, int start, int end)
+{
+  PyRopeObject* rope;
+  if(end>self->n_length)
+	end=self->n_length;
+  if(start>self->n_length)
+	start=self->n_length;
+  rope=python_rope_new();
+  if(rope==NULL)
+	return PyErr_NoMemory();
+  rope->n_type=ROPE_SLICE_NODE;
+  rope->n_length=end-start;
+  rope->n_node.slice.left=self;
+  rope->n_node.slice.right=NULL;
+  rope->n_node.slice.start=start;
+  rope->n_node.slice.end=end;
+  return (PyObject*) rope;
+}
+
 static PyMethodDef ropes_methods[] =
   {
 	{NULL,NULL,0,NULL}
@@ -297,7 +328,7 @@ static PySequenceMethods ropeobj_as_sequence =
 	(binaryfunc)ropeobj_concat_new, /* sq_concat */
 	(intargfunc)ropeobj_repeat_new, /* sq_repeat */
 	(intargfunc) ropeobj_item, /* sq_item */
-	NULL, /* sq_slice */
+	(intintargfunc) ropeobj_slice, /* sq_slice */
 	NULL, /* sq_ass_item */
 	NULL, /* sq_ass_slice */
 	NULL, /* sq_contains */

@@ -1,6 +1,7 @@
 #!/usr/bin/python
 import unittest
 import ropes
+import random
 
 para1='Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Donec tortor elit, tincidunt a, sodales vitae, aliquet vel, risus. Cras fringilla dapibus enim. Morbi ultrices pulvinar orci. Praesent placerat massa a nulla. Integer blandit tincidunt lorem. Proin imperdiet convallis dolor. Aliquam ac nisi. Morbi dapibus luctus risus. Pellentesque viverra, arcu at mattis tempor, nisl leo molestie sem, in auctor mi augue a nisl. Donec metus elit, egestas vel, convallis vel, condimentum a, mi. Suspendisse ultricies pede in justo. Mauris at justo.'
 para2='Cras ac felis. Proin eget metus. Nullam tristique tristique leo. Integer ullamcorper viverra diam. Sed faucibus fringilla enim. Fusce augue. Nunc a dolor. Sed rhoncus ligula a orci. Integer diam felis, semper at, tempor at, dapibus id, orci. Nam eget arcu id lorem congue vehicula. Proin facilisis libero eget neque. Sed congue lobortis nunc.'
@@ -53,6 +54,14 @@ class TestRopes(unittest.TestCase):
         r1+=' test'
         self.assertEqual(str(r1.right.left), ' is')
         self.assertEqual(r1.right.right.type, ropes.ROPE_CONCAT_NODE)
+
+    def testSlicing(self):
+        r1=ropes.Rope(para1)
+        r1+=para2
+        s1=para1+para2
+        start=random.randint(0, len(r1)-1)
+        end=random.randint(start+1, len(r1))
+        self.assertEqual(str(r1[start:end]), s1[start:end])
 
 if __name__=="__main__":
     unittest.main()

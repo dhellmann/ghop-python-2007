@@ -30,6 +30,7 @@ python_rope_new()
   PyObject* tuple=PyTuple_New(0);
   PyObject* dict=PyDict_New();
   PyRopeObject* new_rope=(PyRopeObject*)PyObject_Call((PyObject*) &ropes_type,tuple,dict);
+  new_rope->n_type=ROPE_UNINITIALIZED_NODE;
   Py_DECREF(tuple);
   Py_DECREF(dict);
   return (PyObject*)new_rope;

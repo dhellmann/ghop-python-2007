@@ -71,7 +71,8 @@ void rope_move(PyRopeObject* dest, PyRopeObject* src)
 	dest->n_node.slice.end=src->n_node.slice.end;
 	break;
   case ROPE_LITERAL_NODE:
-	dest->n_node.literal.l_literal=src->n_node.literal.l_literal;
+	dest->n_node.literal.l_literal=malloc(src->n_length);
+	memcpy(dest->n_node.literal.l_literal, src->n_node.literal.l_literal, src->n_length);
 	break;
   }
 }
@@ -183,7 +184,7 @@ void rope_to_string(PyRopeObject* node, char* v, unsigned int w, int offset, int
 	}
 	break;
   case ROPE_LITERAL_NODE:
-	memcpy(v+w, node->n_node.literal.l_literal+offset, ((node->n_length<length)?node->n_length:length));
+	memcpy(v+w, node->n_node.literal.l_literal+offset, (((node->n_length-offset)<length)?(node->n_length-offset):length));
 	break;
   default: break;
   }

@@ -24,6 +24,7 @@
 #include "Python.h"
 
 #define LITERAL_LENGTH 64
+#define ROPE_MAX_DEPTH 32
 
 #define ROPE_UNINITIALIZED_NODE 0x0
 #define ROPE_CONCAT_NODE 0x1
@@ -62,6 +63,17 @@ typedef struct _PyRopeObject
 	} literal;
   } n_node;
 } PyRopeObject;
+
+typedef struct _PyRopeIterObject
+{
+  PyObject_HEAD
+  PyRopeObject* rope;
+  int pos;
+  PyObject* cur_iter;
+  int times;
+  PyObject** cached;
+  int is_left;
+} PyRopeIterObject;
 
 typedef void(*rope_traverse_func)(PyRopeObject*);
 

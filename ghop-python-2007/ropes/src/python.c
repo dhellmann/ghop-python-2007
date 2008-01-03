@@ -23,6 +23,7 @@
 #include "ropes.h"
 
 static PyTypeObject ropes_type;
+static PyTypeObject rope_iter_type;
 
 PyObject*
 python_rope_new()
@@ -85,6 +86,20 @@ ropeobj_dealloc(PyRopeObject* r)
 	free(r->n_node.literal.l_literal);
   }
   PyObject_Del((PyObject*)r);
+}
+
+static void
+ropeiter_dealloc(PyRopeIterObject* r)
+{
+  if(r->rope->n_type==ROPE_MULTIPLY_NODE)
+	{
+	  int i=0;
+	  for(;i<(r->rope->n_length/r->rope->n_node.multiply.m_times);i++)
+		Py_XDECREF(r->cached[i]);
+	  free(r->cached);
+	}
+  Py_DECREF(r->rope);
+  PyObject_Del(r);
 }
 
 static PyObject*
@@ -311,6 +326,121 @@ ropeobj_slice(PyRopeObject* self, int start, int end)
   return (PyObject*) rope;
 }
 
+static int
+ropeobj_compare(PyRopeObject* self, PyRopeObject* other)
+{
+  int retval=-1;
+  int i=0;
+  PyRopeIterObject *self_iter, *other_iter;
+  PyObject *self_cur, *other_cur;
+  if (self->n_length!=other->n_length) {
+	if(self->n_length<other->n_length) return -1;
+	else return 1;
+  }
+  self_iter=PyObject_GetIter(self);
+  if(!self_iter)
+	return -1;
+  other_iter=PyObject_GetIter(other);
+  if(!other_iter)
+	return -1;
+  for(;i<self->n_length;i++)
+	{
+	  self_cur=PyIter_Next(self_iter);
+	  if(!self_cur)
+		return -1;
+	  other_cur=PyIter_Next(other_iter);
+	  if(!other_cur)
+		return -1;
+	  retval=PyObject_Compare(self_cur, other_cur);
+	  if(retval!=0) {
+		Py_DECREF(self_cur);
+		Py_DECREF(other_cur);
+		return retval;
+	  }
+	  Py_DECREF(self_cur);
+	  Py_DECREF(other_cur);
+	}
+  Py_DECREF(self_iter);
+  Py_DECREF(other_iter);
+  return retval;
+}
+
+static PyObject*
+ropeiter_next(PyRopeIterObject* self)
+{
+  if(self->pos>=self->rope->n_length && self->rope->n_type!=ROPE_MULTIPLY_NODE)
+	return NULL;
+  switch(self->rope->n_type)
+	{
+	case ROPE_LITERAL_NODE:
+	  return PyString_FromStringAndSize(self->rope->n_node.literal.l_literal+(self->pos++), 1);
+	  break;
+	case ROPE_SLICE_NODE:
+	  self->pos++;
+	  if((self->pos+self->rope->n_node.slice.start)>self->rope->n_node.slice.end)
+		return NULL;
+	  return PyIter_Next(self->cur_iter);
+	  break;
+	case ROPE_MULTIPLY_NODE:
+	  {
+		int base_length=self->rope->n_length/self->rope->n_node.multiply.m_times;
+		if(self->pos>=base_length)
+		  {
+			if(self->times>=self->rope->n_node.multiply.m_times)
+			  return NULL;
+			self->times++;
+			self->pos=0;
+		  }
+		if(self->times==0)
+		  {
+			self->cached[self->pos]=PyIter_Next(self->cur_iter);
+		  }
+		Py_XINCREF(self->cached[self->pos]);
+		return self->cached[(self->pos++)];
+	  }
+	  break;
+	case ROPE_CONCAT_NODE:
+	  {
+		PyRopeObject* retval=PyIter_Next(self->cur_iter);
+		if(!retval && self->is_left) {
+		  self->is_left=0;
+		  self->cur_iter=PyObject_GetIter(self->rope->n_node.concat.right);
+		  if(!self->cur_iter)
+			return NULL;
+		  else return PyIter_Next(self->cur_iter);
+		}
+		return retval;
+	  }
+	  break;
+	}
+}
+
+static PyRopeIterObject*
+ropeobj_iter(PyRopeObject* self)
+{
+  PyRopeIterObject* retval=(PyRopeIterObject*) PyType_GenericNew(&rope_iter_type, NULL, NULL);
+  if(!retval)
+	return NULL;
+  if(self->n_type==ROPE_UNINITIALIZED_NODE)
+	return NULL;
+  Py_INCREF(self);
+  retval->rope=self;
+  retval->is_left=1;
+  retval->pos=0;
+  retval->times=0;
+  if(self->n_type==ROPE_CONCAT_NODE)
+	retval->cur_iter=PyObject_GetIter(self->n_node.concat.left);
+  else if(self->n_type==ROPE_MULTIPLY_NODE) {
+	retval->cur_iter=PyObject_GetIter(self->n_node.multiply.left);
+	retval->cached=malloc(sizeof(PyObject*) * (self->n_length/self->n_node.multiply.m_times));
+  } else if(self->n_type==ROPE_SLICE_NODE) {
+	int i=0;
+	retval->cur_iter=PyObject_GetIter(self->n_node.slice.left);
+	for(;i<self->n_node.slice.start;i++) PyIter_Next(retval->cur_iter);
+  }
+  return retval;
+}
+
 static PyMethodDef ropes_methods[] =
   {
 	{NULL,NULL,0,NULL}
@@ -346,6 +476,49 @@ static PyGetSetDef ropeobj_getset[] =
 	{"literal", (getter)ropeobj_get_literal, NULL, "Get the literal string", NULL}
   };
 
+static PyTypeObject rope_iter_type=
+  {
+	PyObject_HEAD_INIT(0)	/* Must fill in type value later */
+	0,					/* ob_size */
+	"ropes.RopeIter",			/* tp_name */
+	sizeof(PyRopeIterObject),		/* tp_basicsize */
+	0,					/* tp_itemsize */
+	(destructor)ropeiter_dealloc,		/* tp_dealloc */
+	0,					/* tp_print */
+	0,					/* tp_getattr */
+	0,					/* tp_setattr */
+	0,					/* tp_compare */
+	0,					/* tp_repr */
+	0,					/* tp_as_number */
+	0,					/* tp_as_sequence */
+	0,					/* tp_as_mapping */
+	0,					/* tp_hash */
+	0,					/* tp_call */
+	0,					/* tp_str */
+	0,					/* tp_getattro */
+	0,					/* tp_setattro */
+	0,					/* tp_as_buffer */
+	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE , /* tp_flags */
+	"A Rope Iter type",	/* tp_doc */
+	0,					/* tp_traverse */
+	0,					/* tp_clear */
+	0,					/* tp_richcompare */
+	0,					/* tp_weaklistoffset */
+	(getiterfunc)PyObject_SelfIter,					/* tp_iter */
+	(iternextfunc)ropeiter_next,					/* tp_iternext */
+	0,					/* tp_methods */
+	0,					/* tp_members */
+	0,					/* tp_getset */
+	0,					/* tp_base */
+	0,					/* tp_dict */
+	0,					/* tp_descr_get */
+	0,					/* tp_descr_set */
+	0,					/* tp_dictoffset */
+	0,					/* tp_init */
+	PyType_GenericAlloc,/* tp_alloc */
+	0,					/* tp_new */
+  };
+
 static PyTypeObject ropes_type=
   {
 	PyObject_HEAD_INIT(0)	/* Must fill in type value later */
@@ -357,7 +530,7 @@ static PyTypeObject ropes_type=
 	0,					/* tp_print */
 	0,					/* tp_getattr */
 	0,					/* tp_setattr */
-	(cmpfunc) 0,					/* tp_compare */
+	(cmpfunc) ropeobj_compare,					/* tp_compare */
 	(reprfunc)ropeobj_repr,			/* tp_repr */
 	0,					/* tp_as_number */
 	&ropeobj_as_sequence,					/* tp_as_sequence */
@@ -374,7 +547,7 @@ static PyTypeObject ropes_type=
 	0,					/* tp_clear */
 	0,					/* tp_richcompare */
 	0,					/* tp_weaklistoffset */
-	0,					/* tp_iter */
+	ropeobj_iter,					/* tp_iter */
 	0,					/* tp_iternext */
 	ropeobj_methods,				/* tp_methods */
 	0,					/* tp_members */

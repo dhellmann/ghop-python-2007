@@ -22,6 +22,7 @@
 #include "Python.h"
 #include "ropes.h"
 #include "stdlib.h"
+#include "math.h"
 
 static void _rope_inc_refcount(PyRopeObject* rn)
 {
@@ -156,7 +157,6 @@ void rope_to_string(PyRopeObject* node, char* v, unsigned int w, int offset, int
   case ROPE_SLICE_NODE:
 	offset=node->n_node.slice.start;
 	length=node->n_length;
-	node=node->n_node.slice.left;
   case ROPE_CONCAT_NODE:
 	if(offset<=node->n_node.concat.left->n_length)
 	  {
@@ -170,15 +170,33 @@ void rope_to_string(PyRopeObject* node, char* v, unsigned int w, int offset, int
 	/* XXX: slice support */
   case ROPE_MULTIPLY_NODE:
 	{
-	  int i=0;
-	  for(;i<node->n_node.multiply.m_times;i++) {
-		if(node->n_node.multiply.left) {
-		  rope_to_string(node->n_node.multiply.left, v, w,0,node->n_node.multiply.left->n_length);
-		  w+=node->n_node.multiply.left->n_length;
-		}
-		if(node->n_node.multiply.right) {
-		  rope_to_string(node->n_node.multiply.right, v, w,0,node->n_node.multiply.right->n_length);
-		  w+=node->n_node.multiply.right->n_length;
+	  int base_length=node->n_length/node->n_node.multiply.m_times;
+	  if((offset+length)<base_length) {
+		rope_to_string(node->n_node.concat.left, v, w, offset, length);
+		break;
+	  } else {
+		int i=0;
+		int times=length/base_length;
+		times+=(length-(times*base_length)?1:0);
+		offset=offset%base_length;
+		length=((length%base_length)==0?base_length:(length%base_length));
+		for(;i<times;i++) {
+		  if(i==(times-1)) { 
+			if(node->n_node.multiply.left) {
+			  rope_to_string(node->n_node.multiply.left, v, w,0,length+1);
+			  w+=length+1;
+			}
+		  } else if(i==0) {
+			if(node->n_node.multiply.left) {
+			  rope_to_string(node->n_node.multiply.left, v, w,offset,node->n_node.multiply.left->n_length-offset);
+			  w+=node->n_node.multiply.left->n_length-offset;
+			}
+		  } else {
+			if(node->n_node.multiply.left) {
+			  rope_to_string(node->n_node.multiply.left, v, w,0,node->n_node.multiply.left->n_length);
+			  w+=node->n_node.multiply.left->n_length;
+			}
+		  }
 		}
 	  }
 	}
@@ -373,36 +391,6 @@ void rope_balance(PyRopeObject* r)
   free(node_list);
 }
 
-int masked_power(int a, int b)
-{
-  printf("b: %d\n", b);
-  int num_bits=2;
-  int mask=b>>2;
-  int result=a;
-  if(b==0)
-	return 1;
-  if(b==1)
-	return a;
-  if(a==0)
-	return 0;
-  if(a==1)
-	return 1;
-  while(mask) {
-	num_bits+=1;
-	mask>>=1;
-  }
-  mask = 1 << (num_bits-2);
-  int i=0;
-  for(;i<(num_bits-1);i++) {
-	if(mask & b)
-	  result=result*result*a;
-	else
-	  result=result*result;
-	mask>>=1;
-  }
-  return result;
-}
-
 long rope_hash(PyRopeObject* rope)
 {
   long  retval=0;
@@ -423,8 +411,8 @@ long rope_hash(PyRopeObject* rope)
 	}
   else
 	{
-	  printf("masked_power: %d\n",masked_power(1000003, (rope->n_node.concat.right?rope->n_node.concat.right->n_length:0)));
-	  long x = rope_hash(rope->n_node.concat.left) + rope_hash(rope->n_node.concat.right) * masked_power(1000003, (rope->n_node.concat.right?rope->n_node.concat.right->n_length:0));
+	  //printf("masked_power: %d\n",masked_power(1000003, (rope->n_node.concat.right?rope->n_node.concat.right->n_length:0)));
+	  long x = (rope_hash(rope->n_node.concat.left) + rope_hash(rope->n_node.concat.right)) * pow(1000003, (rope->n_node.concat.right?rope->n_node.concat.right->n_length:0));
 	  printf("%d\n",x);
 	  x = x|0x8000000000000000;
 	  retval=x;

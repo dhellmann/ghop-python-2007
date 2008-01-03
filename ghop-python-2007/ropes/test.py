@@ -3,6 +3,8 @@ import unittest
 import ropes
 import random
 
+#TODO: Make these unit tests more torturous
+
 para1='Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Donec tortor elit, tincidunt a, sodales vitae, aliquet vel, risus. Cras fringilla dapibus enim. Morbi ultrices pulvinar orci. Praesent placerat massa a nulla. Integer blandit tincidunt lorem. Proin imperdiet convallis dolor. Aliquam ac nisi. Morbi dapibus luctus risus. Pellentesque viverra, arcu at mattis tempor, nisl leo molestie sem, in auctor mi augue a nisl. Donec metus elit, egestas vel, convallis vel, condimentum a, mi. Suspendisse ultricies pede in justo. Mauris at justo.'
 para2='Cras ac felis. Proin eget metus. Nullam tristique tristique leo. Integer ullamcorper viverra diam. Sed faucibus fringilla enim. Fusce augue. Nunc a dolor. Sed rhoncus ligula a orci. Integer diam felis, semper at, tempor at, dapibus id, orci. Nam eget arcu id lorem congue vehicula. Proin facilisis libero eget neque. Sed congue lobortis nunc.'
 para3='In sapien. Fusce viverra lectus in tortor. Nam lobortis massa quis pede. Praesent et est vel purus consequat placerat. In tellus ligula, viverra nec, mattis eu, pretium ac, nulla. Etiam ultrices nisi vel sapien. Quisque leo mauris, vehicula et, condimentum tristique, luctus a, magna. Donec id ante. Proin felis urna, fringilla ut, ullamcorper sed, molestie at, arcu. Curabitur est odio, iaculis ac, dapibus at, ultrices id, risus. Nulla accumsan. Morbi sagittis porta nibh.'
@@ -62,6 +64,16 @@ class TestRopes(unittest.TestCase):
         start=random.randint(0, len(r1)-1)
         end=random.randint(start+1, len(r1))
         self.assertEqual(str(r1[start:end]), s1[start:end])
+
+    def testComparisons(self):
+        r1=ropes.Rope(para1+para2)
+        r2=ropes.Rope(para1)
+        r2+=para2
+        self.assertEqual(r1, r2)
+        r1=ropes.Rope('hello')*3
+        r2=ropes.Rope('hello')*2
+        r2+='hello'
+        self.assertEqual(r1, r2)
 
 if __name__=="__main__":
     unittest.main()

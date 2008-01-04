@@ -2,7 +2,7 @@
 from distutils.core import setup, Extension
 
 ropes_module=Extension('ropes',
-                       sources=['src/ropes.c','src/python.c'])
+                       sources=['src/ropes.c'])
 
 setup(name='Ropes',
       version='1.0',

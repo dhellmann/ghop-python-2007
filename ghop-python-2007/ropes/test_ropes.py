@@ -2,6 +2,7 @@
 import unittest
 import ropes
 import random
+#from test import test_support, string_tests
 
 #TODO: Make these unit tests more torturous
 
@@ -15,21 +16,21 @@ class TestRopes(unittest.TestCase):
     def testAppends(self):
         r1=ropes.Rope()
         r2=ropes.Rope()
-        r2.append(para4)
-        r2+=para5
-        r1.append(para1)
-        r1.append(para2)
-        r1.append(para3)
+        r2+=ropes.Rope(para4)
+        r2+=ropes.Rope(para5)
+        r1+=ropes.Rope(para1)
+        r1+=ropes.Rope(para2)
+        r1+=ropes.Rope(para3)
         r1+=r2
         self.assertEqual(str(r1),para1+para2+para3+para4+para5);
 
     def testBalance(self):
         r1=ropes.Rope()
-        r1.append(para1)
-        r1.append(para2)
-        r1.append(para3)
-        r1.append(para4)
-        r1.append(para5)
+        r1+=ropes.Rope(para1)
+        r1+=ropes.Rope(para2)
+        r1+=ropes.Rope(para3)
+        r1+=ropes.Rope(para4)
+        r1+=ropes.Rope(para5)
         r1.balance()
         self.assertEqual(str(r1),para1+para2+para3+para4+para5);
 
@@ -40,8 +41,8 @@ class TestRopes(unittest.TestCase):
 
     def testLength(self):
         r1=ropes.Rope('hell')
-        r1+='o, w'
-        r1+='orld'
+        r1+=ropes.Rope('o, w')
+        r1+=ropes.Rope('orld')
         self.assertEqual(len(r1), 12)
 
     def testLength(self):
@@ -49,17 +50,9 @@ class TestRopes(unittest.TestCase):
         r1*=100
         self.assertEqual(len(r1), 500)
 
-    def testLeftAndRight(self):
-        r1=ropes.Rope('this')
-        r1+=' is'
-        r1+=' a'
-        r1+=' test'
-        self.assertEqual(str(r1.right.left), ' is')
-        self.assertEqual(r1.right.right.type, ropes.ROPE_CONCAT_NODE)
-
     def testSlicing(self):
         r1=ropes.Rope(para1)
-        r1+=para2
+        r1+=ropes.Rope(para2)
         s1=para1+para2
         start=random.randint(0, len(r1)-1)
         end=random.randint(start+1, len(r1))
@@ -68,11 +61,11 @@ class TestRopes(unittest.TestCase):
     def testComparisons(self):
         r1=ropes.Rope(para1+para2)
         r2=ropes.Rope(para1)
-        r2+=para2
+        r2+=ropes.Rope(para2)
         self.assertEqual(r1, r2)
         r1=ropes.Rope('hello')*3
         r2=ropes.Rope('hello')*2
-        r2+='hello'
+        r2+=ropes.Rope('hello')
         self.assertEqual(r1, r2)
 
 if __name__=="__main__":

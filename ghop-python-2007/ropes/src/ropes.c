@@ -29,8 +29,7 @@
 #define ROPE_DEPTH 32
 
 /* XXX More documentation */
-PyDoc_STRVAR(ropes_module_doc,
-"Ropes implementation for CPython");
+PyDoc_STRVAR(ropes_module_doc, "Ropes implementation for CPython");
 
 enum node_type {
 	LITERAL_NODE,
@@ -58,14 +57,14 @@ typedef struct RopeObject {
 } RopeObject;
 
 typedef struct RopeIter {
-  PyObject_HEAD
-  RopeObject* rope;
-  RopeObject** list;
-  Py_ssize_t list_length;
-  char* cur;
-  Py_ssize_t cur_length;
-  Py_ssize_t base_length;
-  Py_ssize_t pos, list_pos, cur_pos;
+	PyObject_HEAD
+	RopeObject *rope;
+	RopeObject **list;
+	Py_ssize_t list_length;
+	char *cur;
+	Py_ssize_t cur_length;
+	Py_ssize_t base_length;
+	Py_ssize_t pos, list_pos, cur_pos;
 } RopeIter;
 
 
@@ -73,6 +72,10 @@ static PyTypeObject Rope_Type;
 static PyTypeObject RopeIter_Type;
 
 static void rope_balance(RopeObject *r);
+static RopeObject *rope_slice(RopeObject *self, Py_ssize_t start,
+			      Py_ssize_t stop);
+static RopeObject *rope_slice_left(RopeObject *self, Py_ssize_t stop);
+static RopeObject *rope_slice_right(RopeObject *self, Py_ssize_t start);
 
 #define Rope_Check(op) (((PyObject *)(op))->ob_type == &Rope_Type)
 
@@ -170,7 +173,7 @@ rope_repr(RopeObject *self)
 static char
 rope_index(RopeObject *self, Py_ssize_t i)
 {
-	assert (self && i < self->length);
+	assert(self && i < self->length);
 
 	switch (self->type) {
 	case LITERAL_NODE:
@@ -212,7 +215,7 @@ rope_getitem(RopeObject *self, Py_ssize_t i)
 }
 
 static PyObject *
-rope_subscript(RopeObject *self, PyObject *item)
+rope_subscript(RopeObject *self, PyObject * item)
 {
 	if (PyIndex_Check(item)) {
 		Py_ssize_t i = PyNumber_AsSsize_t(item, PyExc_IndexError);
@@ -222,11 +225,20 @@ rope_subscript(RopeObject *self, PyObject *item)
 		return rope_getitem(self, i);
 	}
 	else if (PySlice_Check(item)) {
-		Py_INCREF(Py_NotImplemented);
-		return Py_NotImplemented;
+		Py_ssize_t start, stop, step, length;
+		if(PySlice_GetIndicesEx((PySliceObject *)item,
+					self->length,
+					&start, &stop, &step, &length) < 0) {
+			return NULL;
+		}
+		if(step != 1) {
+			Py_INCREF(Py_NotImplemented);
+			return Py_NotImplemented;
+		}
+		return rope_slice(self, start, stop);
 	}
 	else {
-		PyErr_SetString(PyExc_TypeError, 
+		PyErr_SetString(PyExc_TypeError,
 				"Rope indices must be integers");
 		return NULL;
 	}
@@ -237,7 +249,7 @@ rope_dealloc(RopeObject *self)
 {
 	PyObject_GC_UnTrack(self);
 	Py_TRASHCAN_SAFE_BEGIN(self)
-	switch (self->type) {
+		switch (self->type) {
 	case LITERAL_NODE:
 		PyMem_Free(self->v.literal);
 		break;
@@ -249,7 +261,7 @@ rope_dealloc(RopeObject *self)
 		Py_XDECREF(self->v.repeat.child);
 		break;
 	}
-	((PyObject *)self)->ob_type->tp_free(self);
+	((PyObject *) self)->ob_type->tp_free(self);
 	Py_TRASHCAN_SAFE_END(self)
 }
 
@@ -290,9 +302,9 @@ rope_from_string(const char *str, Py_ssize_t len)
 }
 
 static PyObject *
-rope_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+rope_new(PyTypeObject * type, PyObject * args, PyObject * kwds)
 {
-	static char *kwlist[] = {"string", 0};
+	static char *kwlist[] = { "string", 0 };
 	RopeObject *self;
 	PyObject *str = NULL;
 	const char *literal;
@@ -302,7 +314,7 @@ rope_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 		return NULL;
 
 	if (str == NULL)
-		return (PyObject *)rope_from_string("", 0);
+		return (PyObject *) rope_from_string("", 0);
 	else if (Rope_Check(str)) {
 		Py_INCREF(str);
 		return str;
@@ -317,7 +329,7 @@ rope_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 	length = PyString_GET_SIZE(str);
 	self = rope_from_string(literal, length);
 
-	return (PyObject *)self;
+	return (PyObject *) self;
 }
 
 static RopeObject *
@@ -328,7 +340,7 @@ rope_concat(RopeObject *self, RopeObject *other)
 	if (!Rope_Check(other)) {
 		PyErr_Format(PyExc_TypeError,
 			     "cannot concatenate Rope with '%.50s'",
-			     ((PyObject *)other)->ob_type->tp_name);
+			     ((PyObject *) other)->ob_type->tp_name);
 		return NULL;
 	}
 	Py_INCREF(self);
@@ -336,10 +348,11 @@ rope_concat(RopeObject *self, RopeObject *other)
 	result = rope_from_type(CONCAT_NODE, self->length + other->length);
 	result->v.concat.left = self;
 	result->v.concat.right = other;
-	result->depth=result->v.concat.left->depth+result->v.concat.right->depth;
+	result->depth =
+		result->v.concat.left->depth + result->v.concat.right->depth;
 
-	if(result->depth>ROPE_DEPTH)
-	  rope_balance(result);
+	if (result->depth > ROPE_DEPTH)
+		rope_balance(result);
 
 	return result;
 }
@@ -356,12 +369,12 @@ rope_repeat(RopeObject *self, int count)
 	result = rope_from_type(REPEAT_NODE, self->length * count);
 	result->v.repeat.count = count;
 	Py_INCREF(self);
-	result->v.repeat.child = self;	
+	result->v.repeat.child = self;
 
 	return result;
 }
 
-typedef int (*charproc)(char c, void *arg);
+typedef int (*charproc) (char c, void *arg);
 
 static int
 rope_char_iter(RopeObject *self, charproc f, void *arg)
@@ -372,7 +385,7 @@ rope_char_iter(RopeObject *self, charproc f, void *arg)
 	switch (self->type) {
 	case LITERAL_NODE:
 		for (i = 0; i < self->length; i++) {
-			status = (*f)(self->v.literal[i], arg);
+			status = (*f) (self->v.literal[i], arg);
 			if (status == -1)
 				return -1;
 		}
@@ -442,49 +455,54 @@ rope_length(RopeObject *self)
 }
 
 static void
-ropeiter_dealloc(RopeIter * r)
+ropeiter_dealloc(RopeIter *r)
 {
 	PyMem_Free(r->list);
 	Py_DECREF(r->rope);
 	PyObject_Del(r);
 }
 
-static char*
-ropeiter_get_string(RopeObject* rope, int* base_length)
+static char *
+ropeiter_get_string(RopeObject *rope, int *base_length)
 {
-  char *retval, *retval_p;
-  PyObject* to_str;
-  if(rope->type==REPEAT_NODE) {
-	*base_length=rope->v.concat.left->length;
-	to_str=rope->v.concat.left;
-  } else {
-	*base_length=rope->length;
-	to_str=rope;
-  }
-  retval=PyMem_Malloc(*base_length);
-  retval_p=retval;
-  _rope_str(to_str, &retval_p);
-  return retval;
+	char *retval, *retval_p;
+	PyObject *to_str;
+	if (rope->type == REPEAT_NODE) {
+		*base_length = rope->v.concat.left->length;
+		to_str = rope->v.concat.left;
+	}
+	else {
+		*base_length = rope->length;
+		to_str = rope;
+	}
+	retval = PyMem_Malloc(*base_length);
+	retval_p = retval;
+	_rope_str(to_str, &retval_p);
+	return retval;
 }
 
 static PyObject *
-ropeiter_next(RopeIter * self)
+ropeiter_next(RopeIter *self)
 {
-	int base_length; 
-	PyObject* retval;
+	int base_length;
+	PyObject *retval;
 	if (self->pos >= self->rope->length)
-	  return NULL;
-	if(self->cur_pos>=self->cur_length) {
-	  self->cur_pos=0;
-	  self->list_pos++;
-	  if(self->list_pos>=self->list_length)
 		return NULL;
-	  PyMem_Free(self->cur);
-	  self->cur_length=self->list[self->list_pos]->length;
-	  self->base_length=self->cur_length;
-	  self->cur=ropeiter_get_string(self->list[self->list_pos], &self->base_length);
+	if (self->cur_pos >= self->cur_length) {
+		self->cur_pos = 0;
+		self->list_pos++;
+		if (self->list_pos >= self->list_length)
+			return NULL;
+		PyMem_Free(self->cur);
+		self->cur_length = self->list[self->list_pos]->length;
+		self->base_length = self->cur_length;
+		self->cur =
+			ropeiter_get_string(self->list[self->list_pos],
+					    &self->base_length);
 	}
-	retval=PyString_FromStringAndSize(&self->cur[self->cur_pos%self->base_length], 1);
+	retval = PyString_FromStringAndSize(&self->
+					    cur[self->cur_pos %
+						self->base_length], 1);
 	self->cur_pos++;
 	self->pos++;
 	return retval;
@@ -494,44 +512,44 @@ PyDoc_STRVAR(ropeiter_doc, "Rope Iterator");
 
 static PyTypeObject RopeIter_Type = {
 	PyObject_HEAD_INIT(0)
-	0,                                              /* ob_size */
-	"ropes.RopeIter",                               /* tp_name */
-	sizeof(RopeIter),                               /* tp_basicsize */
-	0,                                              /* tp_itemsize */
-	(destructor) ropeiter_dealloc,                  /* tp_dealloc */
-	0,                                              /* tp_print */
-	0,                                              /* tp_getattr */
-	0,                                              /* tp_setattr */
-	0,                                              /* tp_compare */
-	0,                                              /* tp_repr */
-	0,                                              /* tp_as_number */
-	0,                                              /* tp_as_sequence */
-	0,                                              /* tp_as_mapping */
-	0,                                              /* tp_hash */
-	0,                                              /* tp_call */
-	0,                                              /* tp_str */
-	0,                                              /* tp_getattro */
-	0,                                              /* tp_setattro */
-	0,                                              /* tp_as_buffer */
-	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,       /* tp_flags */
-	ropeiter_doc,                                   /* tp_doc */
-	0,                                              /* tp_traverse */
-	0,                                              /* tp_clear */
-	0,                                              /* tp_richcompare */
-	0,                                              /* tp_weaklistoffset */
-	(getiterfunc) PyObject_SelfIter,                /* tp_iter */
-	(iternextfunc) ropeiter_next,                   /* tp_iternext */
-	0,                                              /* tp_methods */
-	0,                                              /* tp_members */
-	0,                                              /* tp_getset */
-	0,                                              /* tp_base */
-	0,                                              /* tp_dict */
-	0,                                              /* tp_descr_get */
-	0,                                              /* tp_descr_set */
-	0,                                              /* tp_dictoffset */
-	0,                                              /* tp_init */
-	PyType_GenericAlloc,                            /* tp_alloc */
-	0,                                              /* tp_new */
+	0,			/* ob_size */
+	"ropes.RopeIter",	/* tp_name */
+	sizeof(RopeIter),	/* tp_basicsize */
+	0,			/* tp_itemsize */
+	(destructor) ropeiter_dealloc,	/* tp_dealloc */
+	0,			/* tp_print */
+	0,			/* tp_getattr */
+	0,			/* tp_setattr */
+	0,			/* tp_compare */
+	0,			/* tp_repr */
+	0,			/* tp_as_number */
+	0,			/* tp_as_sequence */
+	0,			/* tp_as_mapping */
+	0,			/* tp_hash */
+	0,			/* tp_call */
+	0,			/* tp_str */
+	0,			/* tp_getattro */
+	0,			/* tp_setattro */
+	0,			/* tp_as_buffer */
+	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,	/* tp_flags */
+	ropeiter_doc,		/* tp_doc */
+	0,			/* tp_traverse */
+	0,			/* tp_clear */
+	0,			/* tp_richcompare */
+	0,			/* tp_weaklistoffset */
+	(getiterfunc) PyObject_SelfIter,	/* tp_iter */
+	(iternextfunc) ropeiter_next,	/* tp_iternext */
+	0,			/* tp_methods */
+	0,			/* tp_members */
+	0,			/* tp_getset */
+	0,			/* tp_base */
+	0,			/* tp_dict */
+	0,			/* tp_descr_get */
+	0,			/* tp_descr_set */
+	0,			/* tp_dictoffset */
+	0,			/* tp_init */
+	PyType_GenericAlloc,	/* tp_alloc */
+	0,			/* tp_new */
 };
 
 
@@ -551,8 +569,7 @@ rope_get_balance_list_count(RopeObject *node)
 }
 
 static void
-_rope_balance(RopeObject **parent, RopeObject **node_list,
-	      int node_list_size)
+_rope_balance(RopeObject **parent, RopeObject **node_list, int node_list_size)
 {
 	/* If there is only one node just set it */
 	if (node_list_size == 1) {
@@ -562,7 +579,7 @@ _rope_balance(RopeObject **parent, RopeObject **node_list,
 	else {
 		/* Otherwise we need a concatenation node */
 		if (!(*parent)) {
-		  *parent = (RopeObject *)rope_from_type(CONCAT_NODE, 0);
+			*parent = (RopeObject *)rope_from_type(CONCAT_NODE, 0);
 		}
 		if (node_list_size == 2) {
 			/* set the left and rights */
@@ -586,7 +603,10 @@ _rope_balance(RopeObject **parent, RopeObject **node_list,
 			(*parent)->v.concat.left->length +
 			((*parent)->v.concat.right ? (*parent)->v.
 			 concat.right->length : 0);
-		(*parent)->depth = (*parent)->v.concat.left->depth + ((*parent)->v.concat.right?(*parent)->v.concat.right->depth:0);
+		(*parent)->depth =
+			(*parent)->v.concat.left->depth +
+			((*parent)->v.concat.right ? (*parent)->v.concat.
+			 right->depth : 0);
 	}
 }
 
@@ -646,33 +666,43 @@ rope_balance(RopeObject *r)
 	Py_XDECREF(r->v.concat.left);
 	Py_XDECREF(r->v.concat.right);
 	r->v.concat.left = r->v.concat.right = NULL;
-	for (; i < blc; i++) {
+	for (i = 0; i < blc; i++) {
 		if (node_list[i]->type != LITERAL_NODE)
 			_rope_balance(&node_list[i], node_list, blc);
 	}
-	/* XXX: Get rebalancing to make sure every node is filled in with the
-	   full LITERAL_LENGTH or more bytes of data */
-	for (i=0; i < (blc - 1); i++) {
-	  if(node_list[i]->type == LITERAL_NODE && node_list[i+1]->type==LITERAL_NODE) {
-		if((node_list[i]->length + node_list[i+1]->length) < MIN_LITERAL_LENGTH) {
-		  node_list[i]->v.literal = PyMem_Realloc(node_list[i]->v.literal, node_list[i]->length + node_list[i + 1]->length);
-		  memcpy(node_list[i]->v.literal+node_list[i]->length,node_list[i + 1]->v.literal, node_list[i + 1]->length);
-		  node_list[i]->length += node_list[i+1]->length;
-		  Py_DECREF(node_list[i+1]);
-		  memcpy(&node_list[i + 1], &node_list[i + 2], (blc - i - 1)*sizeof(struct RopeObject *));
-		  i--;
-		  blc--;
+	for (i = 0; i < (blc - 1); i++) {
+		if (node_list[i]->type == LITERAL_NODE &&
+		    node_list[i + 1]->type == LITERAL_NODE) {
+			int length =
+				node_list[i]->length + node_list[i +
+								 1]->length;
+			if (length < MIN_LITERAL_LENGTH) {
+				RopeObject *cur = node_list[i];
+				RopeObject *next = node_list[i + 1];
+				cur->v.literal =
+					PyMem_Realloc(cur->v.literal, length);
+				memcpy(cur->v.literal + cur->length,
+				       next->v.literal, next->length);
+				cur->length = length;
+				Py_DECREF(next);
+				memcpy(&node_list[i + 1], &node_list[i + 2],
+				       (blc - i -1) *
+					   sizeof(struct RopeObject *));
+				i--;
+				blc--;
+			}
 		}
-	  }
 	}
-	if(blc==1) {
-	  r->type=node_list[0]->type;
-	  r->v.literal=PyMem_Malloc(node_list[0]->length);
-	  memcpy(r->v.literal, node_list[0]->v.literal, node_list[0]->length);
-	  r->length=node_list[0]->length;
-	  Py_DECREF(node_list[0]);
-	} else
-	  _rope_balance(&r, node_list, blc);
+	if (blc == 1) {
+		r->type = node_list[0]->type;
+		r->v.literal = PyMem_Malloc(node_list[0]->length);
+		memcpy(r->v.literal, node_list[0]->v.literal,
+		       node_list[0]->length);
+		r->length = node_list[0]->length;
+		Py_DECREF(node_list[0]);
+	}
+	else
+		_rope_balance(&r, node_list, blc);
 	PyMem_Free(node_list);
 }
 
@@ -688,22 +718,22 @@ rope_contains(RopeObject *self, RopeObject *other)
 				"'in <rope>' requires rope as left operand");
 		return -1;
 	}
-	self_iter = (RopeIter *) PyObject_GetIter((PyObject *)self);
+	self_iter = (RopeIter *)PyObject_GetIter((PyObject *) self);
 	if (!self_iter)
 		return -1;
-	other_iter = (RopeIter *) PyObject_GetIter((PyObject *)other);
+	other_iter = (RopeIter *)PyObject_GetIter((PyObject *) other);
 	if (!other_iter)
 		return -1;
-	other_cur = PyIter_Next((PyObject *)other_iter);
+	other_cur = PyIter_Next((PyObject *) other_iter);
 	for (; i < self->length; i++) {
-		self_cur = PyIter_Next((PyObject *)self_iter);
+		self_cur = PyIter_Next((PyObject *) self_iter);
 		if (PyObject_Compare(self_cur, other_cur) != 0) {
 			Py_XDECREF(self_cur);
 			continue;
 		}
 		for (; j < (other->length - 1); j++) {
-			other_cur = PyIter_Next((PyObject *)other_iter);
-			self_cur = PyIter_Next((PyObject *)self_iter);
+			other_cur = PyIter_Next((PyObject *) other_iter);
+			self_cur = PyIter_Next((PyObject *) self_iter);
 			if (!self_cur || !other_cur) {
 				Py_XDECREF(other_cur);
 				Py_XDECREF(self_cur);
@@ -721,18 +751,18 @@ rope_contains(RopeObject *self, RopeObject *other)
 		Py_XDECREF(other_iter);
 		Py_XDECREF(self_iter);
 		return 1;
-	reset:
+	      reset:
 		Py_XDECREF(self_cur);
 		Py_XDECREF(other_cur);
 		Py_XDECREF(other_iter);
 		Py_XDECREF(self_iter);
-		other_iter = (RopeIter *) PyObject_GetIter((PyObject *)
-												   other);
-		other_cur = PyIter_Next((PyObject *)other_iter);
-		self_iter = (RopeIter *) PyObject_GetIter((PyObject *)
-												  self);
-		for(skip=0;skip<i;skip++){
-			self_cur=PyIter_Next(self_iter);
+		other_iter = (RopeIter *)PyObject_GetIter((PyObject *)
+							  other);
+		other_cur = PyIter_Next((PyObject *) other_iter);
+		self_iter = (RopeIter *)PyObject_GetIter((PyObject *)
+							 self);
+		for (skip = 0; skip < i; skip++) {
+			self_cur = PyIter_Next(self_iter);
 			Py_DECREF(self_cur);
 		}
 	}
@@ -756,17 +786,17 @@ rope_compare(RopeObject *self, RopeObject *other)
 		else
 			return 1;
 	}
-	self_iter = (RopeIter *) PyObject_GetIter((PyObject *)self);
+	self_iter = (RopeIter *)PyObject_GetIter((PyObject *) self);
 	if (!self_iter)
 		return -1;
-	other_iter = (RopeIter *) PyObject_GetIter((PyObject *)other);
+	other_iter = (RopeIter *)PyObject_GetIter((PyObject *) other);
 	if (!other_iter)
 		return -1;
 	for (; i < self->length; i++) {
-		self_cur = PyIter_Next((PyObject *)self_iter);
+		self_cur = PyIter_Next((PyObject *) self_iter);
 		if (!self_cur)
 			return -1;
-		other_cur = PyIter_Next((PyObject *)other_iter);
+		other_cur = PyIter_Next((PyObject *) other_iter);
 		if (!other_cur)
 			return -1;
 		retval = PyObject_Compare(self_cur, other_cur);
@@ -788,265 +818,312 @@ rope_compare(RopeObject *self, RopeObject *other)
 static RopeIter *
 rope_iter(RopeObject *self)
 {
-	RopeIter *retval =
-		(RopeIter *) PyType_GenericNew(&RopeIter_Type, NULL,
-						       NULL);
+	RopeIter *retval = (RopeIter *)PyType_GenericNew(&RopeIter_Type, NULL,
+							 NULL);
 	if (!retval)
 		return NULL;
 	Py_INCREF(self);
-	retval->pos=0;
-	retval->rope=self;
-	retval->list_length=rope_get_balance_list_count(self);
-	retval->list=PyMem_Malloc(sizeof(struct RopeObject *) * retval->list_length);
+	retval->pos = 0;
+	retval->rope = self;
+	retval->list_length = rope_get_balance_list_count(self);
+	retval->list =
+		PyMem_Malloc(sizeof(struct RopeObject *) *
+			     retval->list_length);
 	_rope_get_balance_list(retval->list, self);
-	retval->list_pos=0;
-	retval->cur_length=retval->list[0]->length;
-	retval->base_length=retval->cur_length;
-	retval->cur_pos=0;
-	retval->cur=(retval->list_length?ropeiter_get_string(retval->list[0], &retval->base_length):NULL);
-	if(PyErr_Occurred())
-	  return NULL;
+	retval->list_pos = 0;
+	retval->cur_length = retval->list[0]->length;
+	retval->base_length = retval->cur_length;
+	retval->cur_pos = 0;
+	retval->cur =
+		(retval->
+		 list_length ? ropeiter_get_string(retval->list[0],
+						   &retval->
+						   base_length) : NULL);
+	if (PyErr_Occurred())
+		return NULL;
 	return retval;
 }
 
-static RopeObject* rope_slice(RopeObject* self, Py_ssize_t start, Py_ssize_t stop);
-static RopeObject* rope_slice_left(RopeObject* self, Py_ssize_t stop);
-static RopeObject* rope_slice_right(RopeObject* self, Py_ssize_t start);
-
-static RopeObject*
-rope_slice_right(RopeObject* self, Py_ssize_t start)
+static RopeObject *
+rope_slice_right(RopeObject *self, Py_ssize_t start)
 {
-  while(1) {
-	if(start == 0) {
-	  Py_INCREF(self);
-	  return self;
-	}
-	if(self->type == CONCAT_NODE) {
-	  Py_ssize_t llen=self->v.concat.left->length;
-	  if(start >= llen) {
-		self = self->v.concat.right;
-		start = start - llen;
-		continue;
-	  } else {
-		RopeObject *left, *retval;
-		left=rope_slice_right(self->v.concat.left,start);
-		retval=rope_concat(left, self->v.concat.right);
-		Py_DECREF(left);
-		return retval;
-	  }
-	}
-	return rope_slice(self, start, self->length);
-  }
-}
-
-static RopeObject*
-rope_slice_left(RopeObject* self, Py_ssize_t stop)
-{
-  while(1) {
-	if(stop==self->length) {
-	  Py_INCREF(self);
-	  return self;
-	}
-	if(self->type==CONCAT_NODE) {
-	  Py_ssize_t llen = self->v.concat.left->length;
-	  if(stop <= llen) {
-		self=self->v.concat.left;
-		continue;
-	  } else {
-		RopeObject *right, *retval;
-		right=rope_slice_left(self->v.concat.right, stop-llen);
-		retval=rope_concat(self->v.concat.left, right);
-		Py_DECREF(right);
-		return retval;
-	  }
-	}
-	return rope_slice(self, 0, stop);
-  }
-}
-
-static RopeObject*
-rope_slice(RopeObject* self, Py_ssize_t start, Py_ssize_t stop) {
-  RopeObject* retval;
-  Py_ssize_t adj_start, adj_stop;
-  if(stop>self->length)
-	stop=self->length;
-  if(start>=self->length) {
-	PyErr_SetString(PyExc_ValueError, "No sane value to slice!");
-	return NULL;
-  }
-  switch(self->type) {
-  case LITERAL_NODE:
-	retval=rope_from_string(self->v.literal+start, stop-start);
-	break;
-  case REPEAT_NODE:
-	/* The basic procedure here is to first find how much the new
-	   repeat node needs to be repeated. Then we need to create two
-	   new concatenation nodes, then two new literal nodes, one for
-	   the leftest node and one for the rightest node. Then concatenate
-	   them together
-	*/
-	retval=rope_from_type(REPEAT_NODE, 0);
-	retval->v.repeat.child=self->v.repeat.child;
-	Py_INCREF(retval->v.repeat.child);
-	adj_start=(start%self->v.repeat.child->length?start+(self->v.repeat.child->length-(start%self->v.repeat.child->length)):start);
-	adj_stop=stop-(stop%self->v.repeat.child->length);
-	retval->v.repeat.count=((adj_stop-adj_start)/self->v.repeat.child->length);
-	retval->length=retval->v.repeat.count*retval->v.repeat.child->length;
-	if(retval->v.repeat.count<=0) {
-	  RopeObject *left, *right,*old_retval;
-	  old_retval=retval;
-	  left=right=NULL;
-	  left=rope_slice(retval->v.repeat.child, (start%retval->v.repeat.child->length), start+(stop-start));
-	  retval=left;
-	  if(left->length==(stop-start))
-		break;
-	  if((stop%old_retval->v.repeat.child->length)!=0) {
-		right=rope_slice(old_retval->v.repeat.child, 0, (stop%old_retval->v.repeat.child->length));
-		if(left && right) {
-		  retval=rope_concat(left, right);
-		  Py_DECREF(right);
-		  Py_DECREF(left);
-		} else if(right) {
-		  retval=right;
-		} else {
-		  retval=left;
+	while (1) {
+		if (start == 0) {
+			Py_INCREF(self);
+			return self;
 		}
-	  }
-	  Py_DECREF(old_retval);
-	} else {
-	  RopeObject *start_node, *end_node, *old_retval;
-	  old_retval=retval;
-	  if((start%retval->v.repeat.child->length)!=0) {
-		start_node=rope_slice(retval->v.repeat.child, (start%retval->v.repeat.child->length), old_retval->v.repeat.child->length);
-		retval=rope_concat(start_node, retval);
-		Py_DECREF(start_node); /* Because their refcounts were increased in rope_concat */
-		Py_DECREF(old_retval); 
-	  }
-	  if((stop%old_retval->v.repeat.child->length)!=0) {
-		end_node=rope_slice(old_retval->v.repeat.child, 0, (stop%old_retval->v.repeat.child->length));
-		old_retval=retval;
-		retval=rope_concat(retval, end_node);
-		Py_DECREF(end_node);
-		Py_DECREF(old_retval);
-	  }
+		if (self->type == CONCAT_NODE) {
+			Py_ssize_t llen = self->v.concat.left->length;
+			if (start >= llen) {
+				self = self->v.concat.right;
+				start = start - llen;
+				continue;
+			}
+			else {
+				RopeObject *left, *retval;
+				left = rope_slice_right(self->v.concat.left,
+							start);
+				retval = rope_concat(left,
+						     self->v.concat.right);
+				Py_DECREF(left);
+				return retval;
+			}
+		}
+		return rope_slice(self, start, self->length);
 	}
-	break;
-  case CONCAT_NODE:
-	if(start==0) {
-	  if(stop==self->length) {
-		Py_INCREF(self);
-		retval=self;
-	  }
-	  return rope_slice_left(self, stop);
-	} else if(stop==self->length) {
-	  return rope_slice_right(self, start);
-	} else {
-	  RopeObject *left, *right;
-	  if(stop<self->v.concat.left->length) {
-		return rope_slice(self->v.concat.left, start, stop);
-	  } else if (start>self->v.concat.left->length) {
-		return rope_slice(self->v.concat.right, start-self->v.concat.left->length, stop-self->v.concat.left->length);
-	  }
-	  left=rope_slice_right(self->v.concat.left, start);
-	  right=rope_slice_left(self->v.concat.right, stop-self->v.concat.left->length);
-	  if(left && right) {
-		retval=rope_concat(left, right);
-		Py_DECREF(left);
-		Py_DECREF(right);
-	  } else if(right) {
-		retval=right;
-	  } else {
-		retval=left;
-	  }
+}
+
+static RopeObject *
+rope_slice_left(RopeObject *self, Py_ssize_t stop)
+{
+	while (1) {
+		if (stop == self->length) {
+			Py_INCREF(self);
+			return self;
+		}
+		if (self->type == CONCAT_NODE) {
+			Py_ssize_t llen = self->v.concat.left->length;
+			if (stop <= llen) {
+				self = self->v.concat.left;
+				continue;
+			}
+			else {
+				RopeObject *right, *retval;
+				right = rope_slice_left(self->v.concat.right,
+							stop - llen);
+				retval = rope_concat(self->v.concat.left,
+						     right);
+				Py_DECREF(right);
+				return retval;
+			}
+		}
+		return rope_slice(self, 0, stop);
 	}
-	break;
-  }
-  return retval;
+}
+
+static RopeObject *
+rope_slice(RopeObject *self, Py_ssize_t start, Py_ssize_t stop)
+{
+	RopeObject *retval;
+	Py_ssize_t adj_start, adj_stop;
+	if (stop > self->length)
+		stop = self->length;
+	if (start >= self->length) {
+		PyErr_SetString(PyExc_ValueError, "No sane value to slice!");
+		return NULL;
+	}
+	switch (self->type) {
+	case LITERAL_NODE:
+		retval = rope_from_string(self->v.literal + start,
+					  stop - start);
+		break;
+	case REPEAT_NODE:
+		/* The basic procedure here is to first find how much the new
+		 * repeat node needs to be repeated. Then we need to create two
+		 * new concatenation nodes, then two new literal nodes, one for
+		 * the leftest node and one for the rightest node. Then concatenate
+		 * them together
+		 */
+		retval = rope_from_type(REPEAT_NODE, 0);
+		retval->v.repeat.child = self->v.repeat.child;
+		Py_INCREF(retval->v.repeat.child);
+		adj_start =
+			(start % self->v.repeat.child->length ? start +
+			 (self->v.repeat.child->length -
+			  (start % self->v.repeat.child->length)) : start);
+		adj_stop = stop - (stop % self->v.repeat.child->length);
+		retval->v.repeat.count =
+			((adj_stop -
+			  adj_start) / self->v.repeat.child->length);
+		retval->length =
+			retval->v.repeat.count *
+			retval->v.repeat.child->length;
+		if (retval->v.repeat.count <= 0) {
+			RopeObject *left, *right, *old_retval;
+			old_retval = retval;
+			left = right = NULL;
+			left = rope_slice(retval->v.repeat.child,
+					  (start %
+					   retval->v.repeat.child->length),
+					  start + (stop - start));
+			retval = left;
+			if (left->length == (stop - start))
+				break;
+			if ((stop % old_retval->v.repeat.child->length) != 0) {
+				right = rope_slice(old_retval->v.repeat.child,
+						   0,
+						   (stop %
+						    old_retval->v.repeat.
+						    child->length));
+				if (left && right) {
+					retval = rope_concat(left, right);
+					Py_DECREF(right);
+					Py_DECREF(left);
+				}
+				else if (right) {
+					retval = right;
+				}
+				else {
+					retval = left;
+				}
+			}
+			Py_DECREF(old_retval);
+		}
+		else {
+			RopeObject *start_node, *end_node, *old_retval;
+			old_retval = retval;
+			if ((start % retval->v.repeat.child->length) != 0) {
+				start_node =
+					rope_slice(retval->v.repeat.child,
+						   (start %
+						    retval->v.repeat.child->
+						    length),
+						   old_retval->v.repeat.child->
+						   length);
+				retval = rope_concat(start_node, retval);
+				Py_DECREF(start_node);	/* Because their refcounts were increased in rope_concat */
+				Py_DECREF(old_retval);
+			}
+			if ((stop % old_retval->v.repeat.child->length) != 0) {
+				end_node =
+					rope_slice(old_retval->v.repeat.child,
+						   0,
+						   (stop %
+						    old_retval->v.repeat.
+						    child->length));
+				old_retval = retval;
+				retval = rope_concat(retval, end_node);
+				Py_DECREF(end_node);
+				Py_DECREF(old_retval);
+			}
+		}
+		break;
+	case CONCAT_NODE:
+		if (start == 0) {
+			if (stop == self->length) {
+				Py_INCREF(self);
+				retval = self;
+			}
+			return rope_slice_left(self, stop);
+		}
+		else if (stop == self->length) {
+			return rope_slice_right(self, start);
+		}
+		else {
+			RopeObject *left, *right;
+			if (stop < self->v.concat.left->length) {
+				return rope_slice(self->v.concat.left, start,
+						  stop);
+			}
+			else if (start > self->v.concat.left->length) {
+				return rope_slice(self->v.concat.right,
+						  start -
+						  self->v.concat.left->length,
+						  stop -
+						  self->v.concat.left->length);
+			}
+			left = rope_slice_right(self->v.concat.left, start);
+			right = rope_slice_left(self->v.concat.right,
+						stop -
+						self->v.concat.left->length);
+			if (left && right) {
+				retval = rope_concat(left, right);
+				Py_DECREF(left);
+				Py_DECREF(right);
+			}
+			else if (right) {
+				retval = right;
+			}
+			else {
+				retval = left;
+			}
+		}
+		break;
+	}
+	return retval;
 }
 
 static PySequenceMethods rope_as_sequence = {
-	(inquiry)rope_length,                   /* sq_length */
-	(binaryfunc)rope_concat,                /* sq_concat */
-	(ssizeargfunc)rope_repeat,              /* sq_repeat */
-	(ssizeargfunc)rope_getitem,             /* sq_item */
-	(ssizessizeargfunc)rope_slice,          /* sq_slice */
-	0,                                      /* sq_ass_item */
-	0,                                      /* sq_ass_slice */
-	(inquiry)rope_contains,                 /* sq_contains */
-	0,                                      /* sq_inplace_concat */
-	0,                                      /* sq_inplace_repeat */
+	(inquiry) rope_length,		/* sq_length */
+	(binaryfunc) rope_concat,	/* sq_concat */
+	(ssizeargfunc) rope_repeat,	/* sq_repeat */
+	(ssizeargfunc) rope_getitem,	/* sq_item */
+	0,				/* sq_slice */
+	0,				/* sq_ass_item */
+	0,				/* sq_ass_slice */
+	(inquiry) rope_contains,	/* sq_contains */
+	0,				/* sq_inplace_concat */
+	0,				/* sq_inplace_repeat */
 };
 
 static PyMappingMethods rope_as_mapping = {
-	(inquiry)rope_length,                      /* mp_length */
-	(binaryfunc)rope_subscript,                /* mp_subscript */
-	0,                                         /* mp_ass_subscript */
+	(inquiry) rope_length,		/* mp_length */
+	(binaryfunc) rope_subscript,	/* mp_subscript */
+	0,				/* mp_ass_subscript */
 };
 
 /* XXX More documentation */
-PyDoc_STRVAR(rope_doc,
-"Rope type");
+PyDoc_STRVAR(rope_doc, "Rope type");
 
 #if DEBUG
-static PyObject*
-rope_balance_method(PyObject* self, PyObject* args, PyObject* kwds)
+static PyObject *
+rope_balance_method(PyObject * self, PyObject * args, PyObject * kwds)
 {
-  rope_balance(self);
-  Py_RETURN_NONE;
+	rope_balance(self);
+	Py_RETURN_NONE;
 }
 
 static PyMethodDef RopeMethods[] = {
-  {"balance", rope_balance_method, METH_VARARGS, "Balance the rope"},
-  {NULL, NULL, NULL}
+	{"balance", rope_balance_method, METH_VARARGS, "Balance the rope"},
+	{NULL, NULL, NULL}
 };
 #endif
 
 static PyTypeObject Rope_Type = {
 	PyObject_HEAD_INIT(NULL)
-	0,                                              /* ob_size */
-	"ropes.Rope",                                   /* tp_name */
-	sizeof(RopeObject),                             /* tp_basicsize */
-	0,                                              /* tp_itemsize */
-	(destructor)rope_dealloc,                       /* tp_dealloc */
-	0,                                              /* tp_print */
-	0,                                              /* tp_getattr */
-	0,                                              /* tp_setattr */
-	rope_compare,                                   /* tp_compare */
-	(reprfunc)rope_repr,                            /* tp_repr */
-	0,                                              /* tp_as_number */
-	&rope_as_sequence,                              /* tp_as_sequence */
-	&rope_as_mapping,                               /* tp_as_mapping */
-	(hashfunc)rope_hash,                            /* tp_hash */
-	0,                                              /* tp_call */
-	(reprfunc)rope_str,                             /* tp_str */
-	PyObject_GenericGetAttr,                        /* tp_getattro */
-	0,                                              /* tp_setattro */
-	0,                                              /* tp_as_buffer */
-	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE |
-		Py_TPFLAGS_HAVE_GC,                     /* tp_flags */
-	rope_doc,                                       /* tp_doc */
-	(traverseproc)rope_traverse,                    /* tp_traverse */
-	0,                                              /* tp_clear */
-	0,                                              /* tp_richcompare */
-	0,                                              /* tp_weaklistoffset */
-	rope_iter,                                      /* tp_iter */
-	0,                                              /* tp_iternext */
+		0,		/* ob_size */
+	"ropes.Rope",		/* tp_name */
+	sizeof(RopeObject),	/* tp_basicsize */
+	0,			/* tp_itemsize */
+	(destructor) rope_dealloc, /* tp_dealloc */
+	0,			/* tp_print */
+	0,			/* tp_getattr */
+	0,			/* tp_setattr */
+	rope_compare,		/* tp_compare */
+	(reprfunc) rope_repr,	/* tp_repr */
+	0,			/* tp_as_number */
+	&rope_as_sequence,	/* tp_as_sequence */
+	&rope_as_mapping,	/* tp_as_mapping */
+	(hashfunc) rope_hash,	/* tp_hash */
+	0,			/* tp_call */
+	(reprfunc) rope_str,	/* tp_str */
+	PyObject_GenericGetAttr,/* tp_getattro */
+	0,			/* tp_setattro */
+	0,			/* tp_as_buffer */
+	Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,	/* tp_flags */
+	rope_doc,		/* tp_doc */
+	(traverseproc) rope_traverse,	/* tp_traverse */
+	0,			/* tp_clear */
+	0,			/* tp_richcompare */
+	0,			/* tp_weaklistoffset */
+	rope_iter,		/* tp_iter */
+	0,			/* tp_iternext */
 #if DEBUG
-	RopeMethods,                                    /* tp_methods */
+	RopeMethods,		/* tp_methods */
 #else
-	0,												/* tp_methods */
+	0,			/* tp_methods */
 #endif
-	0,                                              /* tp_members */
-	0,                                              /* tp_getset */
-	0,                                              /* tp_base */
-	0,                                              /* tp_dict */
-	0,                                              /* tp_descr_get */
-	0,                                              /* tp_descr_set */
-	0,                                              /* tp_dictoffset */
-	0,                                              /* tp_init */
-	0,                                              /* tp_alloc */
-	rope_new,                                       /* tp_new */
-	0,                                              /* tp_free */
+	0,			/* tp_members */
+	0,			/* tp_getset */
+	0,			/* tp_base */
+	0,			/* tp_dict */
+	0,			/* tp_descr_get */
+	0,			/* tp_descr_set */
+	0,			/* tp_dictoffset */
+	0,			/* tp_init */
+	0,			/* tp_alloc */
+	rope_new,		/* tp_new */
+	0,			/* tp_free */
 };
 
 PyMODINIT_FUNC
@@ -1061,10 +1138,10 @@ initropes(void)
 
 	m = Py_InitModule3("ropes", NULL, ropes_module_doc);
 	if (DEBUG) {
-		PyModule_AddIntConstant(m, "CONCAT_NODE",  CONCAT_NODE);
-		PyModule_AddIntConstant(m, "REPEAT_NODE",  REPEAT_NODE);
+		PyModule_AddIntConstant(m, "CONCAT_NODE", CONCAT_NODE);
+		PyModule_AddIntConstant(m, "REPEAT_NODE", REPEAT_NODE);
 		PyModule_AddIntConstant(m, "LITERAL_NODE", LITERAL_NODE);
 	}
 	Py_INCREF(&Rope_Type);
-	PyModule_AddObject(m, "Rope", (PyObject *)&Rope_Type);
+	PyModule_AddObject(m, "Rope", (PyObject *) & Rope_Type);
 }

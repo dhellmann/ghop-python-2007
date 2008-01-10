@@ -638,7 +638,7 @@ rope_balance(RopeObject* r)
  	_rope_get_iter_list(node_list, r);
 	for(i = 0;i < blc;i++)
 		Py_INCREF(node_list[i]);
-	#define LITERAL_MERGING
+	#ifdef LITERAL_MERGING
 	for (i = 0; i < (blc - 1); i++) {
 		if (node_list[i]->type == LITERAL_NODE &&
 		    node_list[i + 1]->type == LITERAL_NODE) {

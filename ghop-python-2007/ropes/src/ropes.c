@@ -23,10 +23,13 @@
 /**** Start of reviewed part *****************************************/
 
 #include "Python.h"
+#include "limits.h"
 
 #define DEBUG 1
+#define LITERAL_MERGING 1
 #define MIN_LITERAL_LENGTH 128
 #define ROPE_DEPTH 32
+#define ROPE_BALANCE_DEPTH 8
 
 /* XXX More documentation */
 PyDoc_STRVAR(ropes_module_doc, "Ropes implementation for CPython");
@@ -71,7 +74,7 @@ typedef struct RopeIter {
 static PyTypeObject Rope_Type;
 static PyTypeObject RopeIter_Type;
 
-static void rope_balance(RopeObject *r);
+static RopeObject* rope_balance(RopeObject *r);
 static RopeObject *rope_slice(RopeObject *self, Py_ssize_t start,
 			      Py_ssize_t stop);
 static RopeObject *rope_slice_left(RopeObject *self, Py_ssize_t stop);
@@ -290,7 +293,7 @@ rope_from_string(const char *str, Py_ssize_t len)
 	new = rope_from_type(LITERAL_NODE, len);
 	if (new == NULL)
 		return NULL;
-
+	
 	new->v.literal = (char *)PyMem_Malloc(len * sizeof(char));
 	if (new->v.literal == NULL) {
 		PyErr_NoMemory();
@@ -333,7 +336,7 @@ rope_new(PyTypeObject * type, PyObject * args, PyObject * kwds)
 }
 
 static RopeObject *
-rope_concat(RopeObject *self, RopeObject *other)
+rope_concat_unchecked(RopeObject *self, RopeObject *other)
 {
 	RopeObject *result;
 
@@ -349,11 +352,23 @@ rope_concat(RopeObject *self, RopeObject *other)
 	result->v.concat.left = self;
 	result->v.concat.right = other;
 	result->depth =
-		result->v.concat.left->depth + result->v.concat.right->depth;
+		(result->v.concat.left->depth>result->v.concat.right->depth?
+		 result->v.concat.left->depth:result->v.concat.right->depth)+1;
 
-	if (result->depth > ROPE_DEPTH)
-		rope_balance(result);
+	return result;
+}
 
+static RopeObject*
+rope_concat(RopeObject* self, RopeObject* other)
+{
+	RopeObject* result=rope_concat_unchecked(self, other);
+	if(result==NULL)
+		return NULL;
+	if (result->depth > ROPE_BALANCE_DEPTH) {
+		RopeObject* balanced=rope_balance(result);
+		Py_DECREF(result);
+		result=balanced;
+	}
 	return result;
 }
 
@@ -552,73 +567,30 @@ static PyTypeObject RopeIter_Type = {
 	0,			/* tp_new */
 };
 
-
 static int
-rope_get_balance_list_count(RopeObject *node)
+rope_get_iter_list_count(RopeObject *node)
 {
 	int retval = 0;
 	if (!node)
 		return 0;
 	if (node->type == CONCAT_NODE)
 		retval +=
-			rope_get_balance_list_count(node->v.concat.left) +
-			rope_get_balance_list_count(node->v.concat.right);
+			rope_get_iter_list_count(node->v.concat.left) +
+			rope_get_iter_list_count(node->v.concat.right);
 	else
 		retval = 1;
 	return retval;
 }
 
-static void
-_rope_balance(RopeObject **parent, RopeObject **node_list, int node_list_size)
-{
-	/* If there is only one node just set it */
-	if (node_list_size == 1) {
-		*parent = node_list[0];
-		return;
-	}
-	else {
-		/* Otherwise we need a concatenation node */
-		if (!(*parent)) {
-			*parent = (RopeObject *)rope_from_type(CONCAT_NODE, 0);
-		}
-		if (node_list_size == 2) {
-			/* set the left and rights */
-			(*parent)->v.concat.left = node_list[0];
-			(*parent)->v.concat.right = node_list[1];
-		}
-		else {
-			int half_node_list_size = node_list_size / 2;
-			int other_half_node_list_size =
-				node_list_size - half_node_list_size;
-			(*parent)->v.concat.left =
-				(*parent)->v.concat.right = NULL;
-			/* Fill in the left and rights */
-			_rope_balance(&(*parent)->v.concat.left,
-				      node_list, half_node_list_size);
-			_rope_balance(&(*parent)->v.concat.right,
-				      node_list + half_node_list_size,
-				      other_half_node_list_size);
-		}
-		(*parent)->length =
-			(*parent)->v.concat.left->length +
-			((*parent)->v.concat.right ? (*parent)->v.
-			 concat.right->length : 0);
-		(*parent)->depth =
-			(*parent)->v.concat.left->depth +
-			((*parent)->v.concat.right ? (*parent)->v.concat.
-			 right->depth : 0);
-	}
-}
-
 static int
-_rope_get_balance_list(RopeObject **node_list, RopeObject *node)
+_rope_get_iter_list(RopeObject **node_list, RopeObject *node)
 {
 	if (!node)
 		return 0;
 	if (node->type == CONCAT_NODE) {
-		int where = _rope_get_balance_list(node_list,
+		int where = _rope_get_iter_list(node_list,
 						   node->v.concat.left);
-		where += _rope_get_balance_list(node_list + where,
+		where += _rope_get_iter_list(node_list + where,
 						node->v.concat.right);
 		return where;
 	}
@@ -629,53 +601,50 @@ _rope_get_balance_list(RopeObject **node_list, RopeObject *node)
 	return 0;
 }
 
-/* This function increments the reference counts of all nodes that are not
-   concatenation nodes. When we delete the concatenation nodes later None of
-   the literal or other node types will be deleted because their reference
-   counts are > 1 */
-static void
-_rope_balance_del(RopeObject *node)
+static Py_ssize_t
+_find_fib_slot(Py_ssize_t length)
 {
-	if (!node)
-		return;
-	if (node->type == CONCAT_NODE) {
-		_rope_balance_del(node->v.concat.left);
-		_rope_balance_del(node->v.concat.right);
+	Py_ssize_t old_a;
+	Py_ssize_t a = 1;
+	Py_ssize_t b = 2;
+	Py_ssize_t i = 0;
+	if(length==0)
+		return -1;
+	while(1) {
+		if(a <= length && length < b)
+			return i;
+		old_a = a;
+		a = b;
+		b = old_a + b;
+		i++;
 	}
-	else {
-		Py_INCREF(node);
-	}
-	return;
 }
 
-static void
-rope_balance(RopeObject *r)
+static RopeObject*
+rope_balance(RopeObject* r)
 {
-	int blc;
-	int i;
-	RopeObject *old_root, **node_list;
-	if (!r || r->type != CONCAT_NODE)
+	Py_ssize_t blc, i, work_list_length, empty, a,b, old_a ;
+	RopeObject** node_list;
+	RopeObject** work_list;
+	RopeObject *first_node, *cur;
+	if(!r || r->type != CONCAT_NODE)
 		return;
-	blc = rope_get_balance_list_count(r);
-	old_root = r;
-	node_list = PyMem_Malloc(sizeof(struct RopeObject *) * blc);
-	_rope_get_balance_list(node_list, r);
-	/* Delete the concatenation nodes */
-	_rope_balance_del(r->v.concat.left);
-	_rope_balance_del(r->v.concat.right);
-	Py_XDECREF(r->v.concat.left);
-	Py_XDECREF(r->v.concat.right);
-	r->v.concat.left = r->v.concat.right = NULL;
-	for (i = 0; i < blc; i++) {
-		if (node_list[i]->type != LITERAL_NODE)
-			_rope_balance(&node_list[i], node_list, blc);
-	}
+	a=b=INT_MAX;
+	work_list_length = _find_fib_slot(r->length) + 1;
+	empty=work_list_length;
+	blc = rope_get_iter_list_count(r);
+ 	node_list = PyMem_Malloc(sizeof(struct RopeObject *) * (blc + 4));
+	work_list = PyMem_Malloc(sizeof(struct RopeObject *) * work_list_length);
+ 	_rope_get_iter_list(node_list, r);
+	for(i = 0;i < blc;i++)
+		Py_INCREF(node_list[i]);
+	#define LITERAL_MERGING
 	for (i = 0; i < (blc - 1); i++) {
 		if (node_list[i]->type == LITERAL_NODE &&
 		    node_list[i + 1]->type == LITERAL_NODE) {
 			int length =
-				node_list[i]->length + node_list[i +
-								 1]->length;
+				node_list[i]->length +
+				node_list[i +1]->length;
 			if (length < MIN_LITERAL_LENGTH) {
 				RopeObject *cur = node_list[i];
 				RopeObject *next = node_list[i + 1];
@@ -686,24 +655,65 @@ rope_balance(RopeObject *r)
 				cur->length = length;
 				Py_DECREF(next);
 				memcpy(&node_list[i + 1], &node_list[i + 2],
-				       (blc - i -1) *
+				       (blc - i - 2) *
 					   sizeof(struct RopeObject *));
 				i--;
 				blc--;
 			}
 		}
 	}
-	if (blc == 1) {
-		r->type = node_list[0]->type;
-		r->v.literal = PyMem_Malloc(node_list[0]->length);
-		memcpy(r->v.literal, node_list[0]->v.literal,
-		       node_list[0]->length);
-		r->length = node_list[0]->length;
-		Py_DECREF(node_list[0]);
+	if(blc==1) {
+		cur=node_list[0];
+		printf("length: %d\n", cur->length);
+		PyMem_Free(node_list);
+		PyMem_Free(work_list);
+		return cur;
 	}
-	else
-		_rope_balance(&r, node_list, blc);
+	#endif
+	memset(work_list, 0, sizeof(struct RopeObject *) * work_list_length);
+	for(i = 0;i < blc;i++) {
+		cur = node_list[i];
+		if(cur->length < a) {
+			a=1;
+			b=2;
+			empty=0;
+			while(! (cur->length < b)) {
+				empty++;
+				old_a = a;
+				a = b;
+				b = old_a + b;
+			}
+		}
+		else {
+			while(! (cur->length < b &&
+				 ! work_list[empty])) {
+				if(work_list[empty]) {
+					cur = rope_concat_unchecked(work_list[empty], cur);
+					assert(empty<work_list_length);
+					work_list[empty] = NULL;
+				}
+				else {
+					empty++;
+					old_a = a;
+					a = b;
+					b = old_a + b;
+				} 
+			}
+		}
+		assert(empty<work_list_length);
+		work_list[empty] = cur;
+		first_node = cur;
+	}
+	cur = first_node;
+	for(i = empty+1; i < work_list_length;i++) {
+		assert(i<work_list_length);
+		if(work_list[i]) {
+			cur = rope_concat_unchecked(work_list[i], cur);
+		}
+	}
 	PyMem_Free(node_list);
+	PyMem_Free(work_list);
+	return cur;
 }
 
 static int
@@ -825,11 +835,11 @@ rope_iter(RopeObject *self)
 	Py_INCREF(self);
 	retval->pos = 0;
 	retval->rope = self;
-	retval->list_length = rope_get_balance_list_count(self);
+	retval->list_length = rope_get_iter_list_count(self);
 	retval->list =
 		PyMem_Malloc(sizeof(struct RopeObject *) *
 			     retval->list_length);
-	_rope_get_balance_list(retval->list, self);
+	_rope_get_iter_list(retval->list, self);
 	retval->list_pos = 0;
 	retval->cur_length = retval->list[0]->length;
 	retval->base_length = retval->cur_length;
@@ -1069,8 +1079,8 @@ PyDoc_STRVAR(rope_doc, "Rope type");
 static PyObject *
 rope_balance_method(PyObject * self, PyObject * args, PyObject * kwds)
 {
-	rope_balance(self);
-	Py_RETURN_NONE;
+	RopeObject* retval = rope_balance(self);
+	return retval;
 }
 
 static PyMethodDef RopeMethods[] = {

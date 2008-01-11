@@ -654,9 +654,10 @@ rope_balance(RopeObject* r)
 				       next->v.literal, next->length);
 				cur->length = length;
 				Py_DECREF(next);
-				memcpy(&node_list[i + 1], &node_list[i + 2],
-				       (blc - i - 2) *
-					   sizeof(struct RopeObject *));
+				if((blc - i - 2) > 0)
+				  memcpy(&node_list[i + 1], &node_list[i + 2],
+						 (blc - i - 2) *
+						 sizeof(struct RopeObject *));
 				i--;
 				blc--;
 			}
@@ -664,7 +665,6 @@ rope_balance(RopeObject* r)
 	}
 	if(blc==1) {
 		cur=node_list[0];
-		printf("length: %d\n", cur->length);
 		PyMem_Free(node_list);
 		PyMem_Free(work_list);
 		return cur;

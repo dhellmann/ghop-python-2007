@@ -638,7 +638,6 @@ rope_balance(RopeObject* r)
  	_rope_get_iter_list(node_list, r);
 	for(i = 0;i < blc;i++)
 		Py_INCREF(node_list[i]);
-	#ifdef LITERAL_MERGING
 	for (i = 0; i < (blc - 1); i++) {
 		if (node_list[i]->type == LITERAL_NODE &&
 		    node_list[i + 1]->type == LITERAL_NODE) {
@@ -648,11 +647,15 @@ rope_balance(RopeObject* r)
 			if (length < MIN_LITERAL_LENGTH) {
 				RopeObject *cur = node_list[i];
 				RopeObject *next = node_list[i + 1];
-				cur->v.literal =
-					PyMem_Realloc(cur->v.literal, length);
-				memcpy(cur->v.literal + cur->length,
-				       next->v.literal, next->length);
-				cur->length = length;
+				RopeObject *new = rope_from_type(LITERAL_NODE, length);
+				new->v.literal =
+				  PyMem_Malloc(length);
+				memcpy(new->v.literal,
+				       cur->v.literal, cur->length);
+				memcpy(new->v.literal + cur->length,
+					   next->v.literal, next->length);
+				node_list[i] = new;
+				Py_DECREF(cur);
 				Py_DECREF(next);
 				if((blc - i - 2) > 0)
 				  memcpy(&node_list[i + 1], &node_list[i + 2],
@@ -669,7 +672,6 @@ rope_balance(RopeObject* r)
 		PyMem_Free(work_list);
 		return cur;
 	}
-	#endif
 	memset(work_list, 0, sizeof(struct RopeObject *) * work_list_length);
 	for(i = 0;i < blc;i++) {
 		cur = node_list[i];

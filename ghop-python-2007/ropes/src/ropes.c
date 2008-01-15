@@ -72,7 +72,7 @@ typedef struct RopeIter {
 
 typedef struct RopeBalanceState
 {
-	RopeObject* work_list[ROPE_DEPTH];
+  RopeObject* work_list[ROPE_DEPTH]; 
 	Py_ssize_t a, b, old_a, empty;
 	RopeObject *first_node;
 	char* string;
@@ -376,6 +376,8 @@ rope_concat(RopeObject* self, RopeObject* other)
 	if (result->depth > ROPE_BALANCE_DEPTH) {
 		RopeObject* balanced=rope_balance(result);
 		Py_DECREF(result);
+		if(!balanced)
+			return NULL;
 		result=balanced;
 	}
 	return result;
@@ -609,18 +611,17 @@ _rope_get_iter_list(RopeObject **node_list, RopeObject *node)
 	return 0;
 }
 
-static void
+static int
 _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 {
 	if(!cur)
-		return;
-	if(cur->type==CONCAT_NODE) {
-		_rope_balance(cur->v.concat.left, state, 1);
-		_rope_balance(cur->v.concat.right, state, 1);
-		return;
+		return 0;
+	if(cur->type == CONCAT_NODE) {
+		if(_rope_balance(cur->v.concat.left, state, 1) != 0) return -1;
+		return _rope_balance(cur->v.concat.right, state, 1);
 	}
-	if(literal_merging==1) {
-		if(cur->type==LITERAL_NODE && cur->length < MIN_LITERAL_LENGTH && state->string_length < MIN_LITERAL_LENGTH) {
+	if(literal_merging == 1) {
+		if(cur->type == LITERAL_NODE && cur->length < MIN_LITERAL_LENGTH && state->string_length < MIN_LITERAL_LENGTH) {
 			if(!state->string) {
 				state->string = PyMem_Malloc(cur->length);
 				memcpy(state->string, cur->v.literal, cur->length);
@@ -631,7 +632,7 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 				memcpy(state->string + state->string_length, cur->v.literal, cur->length);
 				state->string_length += cur->length;
 			}
-			return;
+			return 0;
 		}
 		else if(state->string) {
 			RopeObject* new;
@@ -639,7 +640,7 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 			new->v.literal = state->string;
 			state->string = NULL;
 			state->string_length = 0;
-			_rope_balance(new, state, 0);
+			if(_rope_balance(new, state, 0) != 0) return -1;
 		}
 	}
 	if(cur->length < state->a) {
@@ -657,8 +658,9 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 		while(! (cur->length < state->b &&
 			 ! state->work_list[state->empty])) {
 			if(state->work_list[state->empty]) {
+				if(!(state->empty < ROPE_DEPTH))
+					return -1;
 				cur = rope_concat_unchecked(state->work_list[state->empty], cur);
-				assert(state->empty<ROPE_DEPTH);
 				state->work_list[state->empty] = NULL;
 			}
 			else {
@@ -669,9 +671,11 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 			} 
 		}
 	}
-	assert(state->empty<ROPE_DEPTH);
+	if(!(state->empty < ROPE_DEPTH))
+		return -1;
 	state->work_list[state->empty] = cur;
 	state->first_node = cur;
+	return 0;
 }
 
 static RopeObject*
@@ -683,28 +687,36 @@ rope_balance(RopeObject* r)
 	RopeBalanceState state;
 	if(!r || r->type != CONCAT_NODE)
 		return NULL;
-	state.a = state.b = INT_MAX;
+	state.a = state.b = PY_SSIZE_T_MAX;
 	state.empty = ROPE_DEPTH;
 	state.string = NULL;
 	state.string_length = 0;
 	state.first_node = NULL;
 	memset(state.work_list, 0, sizeof(RopeObject*) * ROPE_DEPTH);
-	_rope_balance(r, &state, 1);
+	if(_rope_balance(r, &state, 1) != 0) goto ret_err;
 	if(state.string) {
 		cur = rope_from_type(LITERAL_NODE, state.string_length);
 		cur->v.literal = state.string;
 
-		_rope_balance(cur, &state, 0);
+		if(_rope_balance(cur, &state, 0)!=0) goto ret_err;
 	}
 	cur = state.first_node;
 	for(i = state.empty+1; i < ROPE_DEPTH;i++) {
-		assert(i<ROPE_DEPTH);
+		if(!(i < ROPE_DEPTH)) goto ret_err;
 		if(state.work_list[i]) {
 			cur = rope_concat_unchecked(state.work_list[i], cur);
 		}
 	}
 	assert(begin_length==cur->length);
 	return cur;
+  ret_err:
+	Py_XDECREF(state.first_node);
+	for(i = state.empty + 1;i <ROPE_DEPTH;i++) {
+		if(state.work_list[i])
+			Py_XDECREF(state.work_list[i]);
+	}
+	PyErr_SetString(PyExc_OverflowError, "The rope has grown too long!");
+	return NULL;
 }
 
 static int

@@ -282,7 +282,10 @@ rope_from_type(enum node_type type, Py_ssize_t len)
 {
 	RopeObject *new;
 
-	assert(len >= 0);
+	if(len < 0) {
+		PyErr_SetString(PyExc_OverflowError, "The rope is  too long!");
+		return NULL;
+	}
 	new = PyObject_GC_New(RopeObject, &Rope_Type);
 	if (new == NULL)
 		return NULL;
@@ -358,6 +361,8 @@ rope_concat_unchecked(RopeObject *self, RopeObject *other)
 	Py_INCREF(self);
 	Py_INCREF(other);
 	result = rope_from_type(CONCAT_NODE, self->length + other->length);
+	if(result == NULL)
+		return NULL;
 	result->v.concat.left = self;
 	result->v.concat.right = other;
 	result->depth =
@@ -373,6 +378,11 @@ rope_concat(RopeObject* self, RopeObject* other)
 	RopeObject* result=rope_concat_unchecked(self, other);
 	if(result==NULL)
 		return NULL;
+	if(other->length > 0 && result->length <= self->length) {
+		Py_DECREF(result);
+		PyErr_SetString(PyExc_OverflowError, "The strings are WAY too large!");
+		return NULL;
+	}
 	if (result->depth > ROPE_BALANCE_DEPTH) {
 		RopeObject* balanced=rope_balance(result);
 		Py_DECREF(result);
@@ -393,6 +403,14 @@ rope_repeat(RopeObject *self, int count)
 		return self;
 	}
 	result = rope_from_type(REPEAT_NODE, self->length * count);
+	if(result == NULL)
+		return NULL;
+	if(result->length <= self->length) {
+		result->v.repeat.child = NULL;
+		Py_DECREF(result);
+		PyErr_SetString(PyExc_OverflowError, "The string is too large!");
+		return NULL;
+	}
 	result->v.repeat.count = count;
 	Py_INCREF(self);
 	result->v.repeat.child = self;
@@ -637,6 +655,8 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 		else if(state->string) {
 			RopeObject* new;
 			new= rope_from_type(LITERAL_NODE, state->string_length);
+			if(new == NULL)
+				return -1;
 			new->v.literal = state->string;
 			state->string = NULL;
 			state->string_length = 0;
@@ -696,6 +716,7 @@ rope_balance(RopeObject* r)
 	if(_rope_balance(r, &state, 1) != 0) goto ret_err;
 	if(state.string) {
 		cur = rope_from_type(LITERAL_NODE, state.string_length);
+		if(cur == NULL) goto ret_err;
 		cur->v.literal = state.string;
 
 		if(_rope_balance(cur, &state, 0)!=0) goto ret_err;
@@ -938,6 +959,8 @@ rope_slice(RopeObject *self, Py_ssize_t start, Py_ssize_t stop)
 		 * them together
 		 */
 		retval = rope_from_type(REPEAT_NODE, 0);
+		if(retval == NULL)
+			return NULL;
 		retval->v.repeat.child = self->v.repeat.child;
 		Py_INCREF(retval->v.repeat.child);
 		adj_start =

@@ -351,14 +351,28 @@ static RopeObject *
 rope_concat_unchecked(RopeObject *self, RopeObject *other)
 {
 	RopeObject *result;
-
+	
+	if(!other) {
+		Py_XINCREF(self);
+		return self;
+	}
+	if(!self) {
+		Py_XINCREF(other);
+		return other;
+	}
 	if (!Rope_Check(other)) {
 		PyErr_Format(PyExc_TypeError,
 			     "cannot concatenate Rope with '%.50s'",
 			     ((PyObject *) other)->ob_type->tp_name);
 		return NULL;
 	}
+	if(self->length <= 0) {
+		Py_INCREF(other);
+		return other;
+	}
 	Py_INCREF(self);
+	if(other->length <= 0)
+		return self;
 	Py_INCREF(other);
 	result = rope_from_type(CONCAT_NODE, self->length + other->length);
 	if(result == NULL)
@@ -378,7 +392,7 @@ rope_concat(RopeObject* self, RopeObject* other)
 	RopeObject* result=rope_concat_unchecked(self, other);
 	if(result==NULL)
 		return NULL;
-	if(other->length > 0 && result->length <= self->length) {
+	if(other && self && other->length > 0 && result->length <= self->length) {
 		Py_DECREF(result);
 		PyErr_SetString(PyExc_OverflowError, "The strings are WAY too large!");
 		return NULL;
@@ -641,12 +655,11 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 	if(literal_merging == 1) {
 		if(cur->type == LITERAL_NODE && cur->length < MIN_LITERAL_LENGTH && state->string_length < MIN_LITERAL_LENGTH) {
 			if(!state->string) {
-				state->string = PyMem_Malloc(cur->length);
+				state->string = PyMem_Malloc(MIN_LITERAL_LENGTH);
 				memcpy(state->string, cur->v.literal, cur->length);
 				state->string_length = cur->length;
 			}
 			else {
-				state->string = PyMem_Realloc(state->string, state->string_length + cur->length);
 				memcpy(state->string + state->string_length, cur->v.literal, cur->length);
 				state->string_length += cur->length;
 			}
@@ -657,7 +670,7 @@ _rope_balance(RopeObject* cur, RopeBalanceState* state, int literal_merging)
 			new= rope_from_type(LITERAL_NODE, state->string_length);
 			if(new == NULL)
 				return -1;
-			new->v.literal = state->string;
+			new->v.literal = PyMem_Realloc(state->string, state->string_length);
 			state->string = NULL;
 			state->string_length = 0;
 			if(_rope_balance(new, state, 0) != 0) return -1;
@@ -940,11 +953,16 @@ rope_slice(RopeObject *self, Py_ssize_t start, Py_ssize_t stop)
 {
 	RopeObject *retval;
 	Py_ssize_t adj_start, adj_stop;
+	Py_ssize_t new_start, child_length;
+	RopeObject *left, *right, *old_retval;
 	if (stop > self->length)
 		stop = self->length;
 	if (start >= self->length) {
 		PyErr_SetString(PyExc_ValueError, "No sane value to slice!");
 		return NULL;
+	}
+	if(stop < start) {
+		stop = start;
 	}
 	switch (self->type) {
 	case LITERAL_NODE:
@@ -963,75 +981,32 @@ rope_slice(RopeObject *self, Py_ssize_t start, Py_ssize_t stop)
 			return NULL;
 		retval->v.repeat.child = self->v.repeat.child;
 		Py_INCREF(retval->v.repeat.child);
-		adj_start =
-			(start % self->v.repeat.child->length ? start +
-			 (self->v.repeat.child->length -
-			  (start % self->v.repeat.child->length)) : start);
-		adj_stop = stop - (stop % self->v.repeat.child->length);
-		retval->v.repeat.count =
-			((adj_stop -
-			  adj_start) / self->v.repeat.child->length);
-		retval->length =
-			retval->v.repeat.count *
-			retval->v.repeat.child->length;
+		child_length = self->v.repeat.child->length;
+		new_start = start % child_length;
+		adj_start = (new_start ? start + (child_length - new_start) : start);
+		adj_stop = stop - (stop % child_length);
+		retval->v.repeat.count = ((adj_stop - adj_start) / child_length);
+		retval->length = retval->v.repeat.count * child_length;
+		old_retval = retval;
 		if (retval->v.repeat.count <= 0) {
-			RopeObject *left, *right, *old_retval;
-			old_retval = retval;
 			left = right = NULL;
-			left = rope_slice(retval->v.repeat.child,
-					  (start %
-					   retval->v.repeat.child->length),
-					  start + (stop - start));
+			left = rope_slice(retval->v.repeat.child, new_start, new_start + (stop - start));
 			retval = left;
-			if (left->length == (stop - start))
+			if (retval && retval->length == (stop - start))
 				break;
-			if ((stop % old_retval->v.repeat.child->length) != 0) {
-				right = rope_slice(old_retval->v.repeat.child,
-						   0,
-						   (stop %
-						    old_retval->v.repeat.
-						    child->length));
-				if (left && right) {
-					retval = rope_concat(left, right);
-					Py_DECREF(right);
-					Py_DECREF(left);
-				}
-				else if (right) {
-					retval = right;
-				}
-				else {
-					retval = left;
-				}
-			}
+		}
+		if ((start % child_length) != 0 && old_retval->v.repeat.count > 0) {
+			left = rope_slice(old_retval->v.repeat.child, (start % child_length), child_length);
+			retval = rope_concat(left, old_retval);
+			Py_DECREF(left);	/* Because their refcounts were increased in rope_concat */
 			Py_DECREF(old_retval);
 		}
-		else {
-			RopeObject *start_node, *end_node, *old_retval;
+		if ((stop % child_length) != 0) {
+			right = rope_slice(old_retval->v.repeat.child, 0, (stop % child_length));
 			old_retval = retval;
-			if ((start % retval->v.repeat.child->length) != 0) {
-				start_node =
-					rope_slice(retval->v.repeat.child,
-						   (start %
-						    retval->v.repeat.child->
-						    length),
-						   old_retval->v.repeat.child->
-						   length);
-				retval = rope_concat(start_node, retval);
-				Py_DECREF(start_node);	/* Because their refcounts were increased in rope_concat */
-				Py_DECREF(old_retval);
-			}
-			if ((stop % old_retval->v.repeat.child->length) != 0) {
-				end_node =
-					rope_slice(old_retval->v.repeat.child,
-						   0,
-						   (stop %
-						    old_retval->v.repeat.
-						    child->length));
-				old_retval = retval;
-				retval = rope_concat(retval, end_node);
-				Py_DECREF(end_node);
-				Py_DECREF(old_retval);
-			}
+			retval = rope_concat(retval, right);
+			Py_XDECREF(right);
+			Py_XDECREF(old_retval);
 		}
 		break;
 	case CONCAT_NODE:
